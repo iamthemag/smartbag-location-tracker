@@ -45,6 +45,26 @@ h1 {
     text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
+/* Header responsive adjustments */
+@media (max-width: 1200px) {
+    h1 {
+        font-size: 2.2rem;
+    }
+}
+
+@media (max-width: 992px) {
+    .d-flex.justify-content-between {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+    
+    .d-flex h1 {
+        font-size: 2rem;
+        margin-bottom: 15px;
+    }
+}
+
 .status {
     display: flex;
     align-items: center;
@@ -111,10 +131,13 @@ h1 {
 }
 
 .controls {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: flex-start;
+    margin: 0 -5px;
+}
+
+.controls .btn {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .btn {
@@ -151,9 +174,16 @@ h1 {
     margin-bottom: 20px;
 }
 
-#map {
+.responsive-map {
     height: 500px;
     width: 100%;
+    min-height: 300px;
+}
+
+#map-canvas {
+    height: 500px;
+    width: 100%;
+    min-height: 300px;
 }
 
 .stats {
@@ -382,15 +412,10 @@ h1 {
     }
     
     .controls {
-        flex-wrap: wrap;
-        gap: 8px;
+        margin: 0 -5px;
     }
     
-    .btn {
-        flex: 1;
-        min-width: 140px;
-    }
-    
+    .responsive-map,
     #map-canvas {
         height: 450px;
     }
@@ -441,19 +466,17 @@ h1 {
     }
     
     .controls {
-        flex-direction: column;
-        gap: 10px;
+        margin: 0;
     }
     
-    .btn {
-        width: 100%;
-        padding: 12px 20px;
-        font-size: 0.9rem;
-    }
-    
+    .responsive-map,
     #map-canvas {
         height: 400px;
+    }
+    
+    .map-container {
         margin: 0 -10px;
+        border-radius: 0;
     }
     
     .stats {
@@ -508,9 +531,14 @@ h1 {
         font-size: 0.85rem;
     }
     
+    .responsive-map,
     #map-canvas {
         height: 350px;
+    }
+    
+    .map-container {
         margin: 0 -8px;
+        border-radius: 0;
     }
     
     .stats .label {
@@ -560,9 +588,14 @@ h1 {
         font-size: 0.8rem;
     }
     
+    .responsive-map,
     #map-canvas {
         height: 300px;
+    }
+    
+    .map-container {
         margin: 0 -5px;
+        border-radius: 0;
     }
     
     .coordinates {
