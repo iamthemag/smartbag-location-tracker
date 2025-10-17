@@ -47,10 +47,11 @@
                                 <input type="text" 
                                        class="form-control" 
                                        id="hostname" 
-                                       placeholder="e.g., raspberrypi.local or 192.168.1.100"
+                                       placeholder="e.g., pi.local or 192.168.1.100"
                                        required>
                                 <small class="form-text text-muted">
-                                    Common hostnames: raspberrypi.local, raspberrypi4.local
+                                    <strong>Examples:</strong> pi.local, raspberrypi.local, or IP address (192.168.1.100)<br>
+                                    <strong>💡 Tip:</strong> If hostname fails, use IP address. Find it with: <code>hostname -I</code>
                                 </small>
                             </div>
                             
@@ -173,6 +174,36 @@
                     <div class="card-body">
                         <div id="uploadHistory">
                             <!-- Upload history will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Troubleshooting Card -->
+                <div class="config-card">
+                    <div class="card-header">
+                        <h4><i class="fas fa-question-circle"></i> Troubleshooting</h4>
+                        <p class="text-muted mb-0">Common connection issues and solutions</p>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6><i class="fas fa-exclamation-triangle text-warning"></i> Can't Connect?</h6>
+                                <ul class="small">
+                                    <li><strong>Use IP instead of hostname</strong><br>Find IP: <code>hostname -I</code> on Pi</li>
+                                    <li><strong>Enable SSH:</strong> <code>sudo systemctl enable ssh</code></li>
+                                    <li><strong>Check if Pi is on same network</strong></li>
+                                    <li><strong>Try different hostname:</strong> raspberrypi.local</li>
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <h6><i class="fas fa-info-circle text-info"></i> Find Your Pi's IP</h6>
+                                <ul class="small">
+                                    <li><strong>On Pi:</strong> <code>hostname -I</code> or <code>ip addr show</code></li>
+                                    <li><strong>Router admin panel:</strong> Check connected devices</li>
+                                    <li><strong>Network scanner apps</strong> on your phone</li>
+                                    <li><strong>Command:</strong> <code>ping pi.local</code> shows IP</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>

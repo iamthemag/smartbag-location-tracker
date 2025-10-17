@@ -209,20 +209,80 @@ app.post('/api/ssh/test', (req, res) => {
         return res.status(400).json({ error: 'All fields are required' });
     }
     
+    console.log(`Attempting SSH connection to: ${hostname} with user: ${username}`);
+    
     const conn = new Client();
     
+    // Set a timeout for the entire operation
+    const connectionTimeout = setTimeout(() => {
+        conn.destroy();
+        res.status(500).json({ 
+            error: 'Connection timeout. Please check if the hostname is correct and the Pi is accessible from this server.',
+            suggestions: [
+                'Try using the IP address instead of hostname',
+                'Ensure SSH is enabled on your Raspberry Pi',
+                'Check if the Pi is on the same network as this server',
+                'Verify firewall settings'
+            ]
+        });
+    }, 15000);
+    
     conn.on('ready', () => {
-        console.log(`SSH connection ready to ${hostname}`);
+        clearTimeout(connectionTimeout);
+        console.log(`✅ SSH connection ready to ${hostname}`);
         conn.end();
-        res.json({ success: true, message: 'SSH connection successful' });
+        res.json({ 
+            success: true, 
+            message: 'SSH connection successful',
+            connectedTo: hostname
+        });
     }).on('error', (err) => {
-        console.error('SSH connection error:', err.message);
-        res.status(500).json({ error: 'SSH connection failed: ' + err.message });
+        clearTimeout(connectionTimeout);
+        console.error('❌ SSH connection error:', err);
+        
+        let errorMessage = 'SSH connection failed: ' + err.message;
+        let suggestions = [];
+        
+        // Provide specific suggestions based on error type
+        if (err.code === 'ENOTFOUND') {
+            errorMessage = `Cannot resolve hostname '${hostname}'. The server cannot find this address.`;
+            suggestions = [
+                'Try using the IP address instead (e.g., 192.168.1.100)',
+                'Check if the hostname is correct',
+                'Ensure the Pi is on the same network',
+                'Try using fully qualified domain name if available'
+            ];
+        } else if (err.code === 'ECONNREFUSED') {
+            errorMessage = `Connection refused to ${hostname}:22. SSH service may not be running.`;
+            suggestions = [
+                'Enable SSH on your Raspberry Pi: sudo systemctl enable ssh',
+                'Start SSH service: sudo systemctl start ssh',
+                'Check if port 22 is open',
+                'Verify SSH is listening: sudo netstat -tlnp | grep :22'
+            ];
+        } else if (err.code === 'ETIMEDOUT') {
+            errorMessage = `Connection timed out to ${hostname}. Network or firewall issue.`;
+            suggestions = [
+                'Check network connectivity',
+                'Verify firewall settings',
+                'Ensure the Pi is powered on and connected',
+                'Try connecting from a device on the same network first'
+            ];
+        }
+        
+        res.status(500).json({ 
+            error: errorMessage,
+            suggestions: suggestions,
+            hostname: hostname,
+            errorCode: err.code
+        });
     }).connect({
         host: hostname,
         username: username,
         password: password,
-        timeout: 10000
+        timeout: 12000,
+        readyTimeout: 12000,
+        keepaliveInterval: 1000
     });
 });
 

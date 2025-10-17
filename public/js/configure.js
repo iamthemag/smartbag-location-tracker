@@ -95,10 +95,22 @@ async function handleConnectionTest(e) {
             }, 500);
             
         } else {
-            showStatus('connectionStatus', 
-                `<i class="fas fa-times-circle status-disconnected"></i> Connection failed: ${result.error}`, 
-                'danger'
-            );
+            // Show detailed error with suggestions
+            let errorHtml = `<i class="fas fa-times-circle status-disconnected"></i> ${result.error}`;
+            
+            if (result.suggestions && result.suggestions.length > 0) {
+                errorHtml += '<br><br><strong>Suggestions:</strong><ul>';
+                result.suggestions.forEach(suggestion => {
+                    errorHtml += `<li>${suggestion}</li>`;
+                });
+                errorHtml += '</ul>';
+            }
+            
+            if (result.errorCode === 'ENOTFOUND') {
+                errorHtml += '<br><br><div class="alert alert-info mt-2"><strong>💡 Quick Fix:</strong> Since you can connect via PuTTY, try using your Pi\'s IP address instead of the hostname. You can find it by running <code>hostname -I</code> on your Pi or check your router\'s admin panel.</div>';
+            }
+            
+            showStatus('connectionStatus', errorHtml, 'danger');
         }
         
     } catch (error) {
