@@ -524,50 +524,6 @@ function initializeEventListeners() {
         `;
     });
     
-    // Configure SmartBag button
-    document.getElementById('configureBtn').addEventListener('click', function() {
-        // Show configuration modal or redirect to configuration page
-        const configChoice = confirm(
-            'SmartBag Configuration\n\n' +
-            'Choose configuration method:\n\n' +
-            '• Click OK to configure via web interface\n' +
-            '• Click Cancel to configure via mobile app'
-        );
-        
-        if (configChoice) {
-            // Web interface configuration
-            alert(
-                'Web Configuration Instructions:\n\n' +
-                '1. Connect to SmartBag Wi-Fi hotspot\n' +
-                '2. Open browser and go to 192.168.4.1\n' +
-                '3. Configure your daily items\n' +
-                '4. Set up schedules and preferences\n\n' +
-                'Make sure your SmartBag is in configuration mode!'
-            );
-        } else {
-            // Mobile app configuration
-            alert(
-                'Mobile App Configuration:\n\n' +
-                '1. Download the SmartBag mobile app\n' +
-                '2. Connect your phone to SmartBag via Bluetooth\n' +
-                '3. Follow the in-app setup wizard\n' +
-                '4. Configure items and schedules\n\n' +
-                'App available on Google Play and App Store'
-            );
-        }
-        
-        // Visual feedback
-        this.textContent = 'Configuration Info Shown!';
-        this.classList.remove('btn-success');
-        this.classList.add('btn-info');
-        
-        setTimeout(() => {
-            this.textContent = 'Configure SmartBag';
-            this.classList.remove('btn-info');
-            this.classList.add('btn-success');
-        }, 2000);
-    });
-    
     // Logout button
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
     

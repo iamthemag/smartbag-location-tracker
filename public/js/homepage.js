@@ -74,77 +74,14 @@ function setupLoginForm() {
     });
 }
 
-// Setup hero configure button
+// Setup hero configure button (placeholder)
 function setupHeroConfigureButton() {
     const heroConfigureBtn = document.getElementById('heroConfigureBtn');
     
     heroConfigureBtn.addEventListener('click', function() {
-        // Show configuration options
-        const configChoice = confirm(
-            'SmartBag Configuration\n\n' +
-            'Choose your preferred configuration method:\n\n' +
-            '• Click OK for Web Interface (Wi-Fi hotspot)\n' +
-            '• Click Cancel for Mobile App (Bluetooth)'
-        );
-        
-        if (configChoice) {
-            // Web interface configuration
-            showWebConfigInstructions();
-        } else {
-            // Mobile app configuration  
-            showMobileAppInstructions();
-        }
-        
-        // Visual feedback
-        this.innerHTML = '<i class="fas fa-check"></i> Instructions Shown!';
-        this.classList.remove('btn-success');
-        this.classList.add('btn-info');
-        
-        setTimeout(() => {
-            this.innerHTML = '<i class="fas fa-cog"></i> Configure Bag Items';
-            this.classList.remove('btn-info');
-            this.classList.add('btn-success');
-        }, 3000);
+        // Placeholder - will be implemented later
+        alert('Configure Bag Items feature will be implemented soon!');
     });
-}
-
-// Show web interface configuration instructions
-function showWebConfigInstructions() {
-    alert(
-        'SmartBag Web Configuration\n\n' +
-        'Follow these steps:\n\n' +
-        '1️⃣ Put your SmartBag in Configuration Mode\n' +
-        '   • Press and hold the Config button for 3 seconds\n' +
-        '   • Blue LED will start blinking\n\n' +
-        '2️⃣ Connect to SmartBag Wi-Fi\n' +
-        '   • Network: "SmartBag-Setup"\n' +
-        '   • Password: "smartbag123"\n\n' +
-        '3️⃣ Open Configuration Interface\n' +
-        '   • Go to: http://192.168.4.1\n' +
-        '   • Configure daily items and schedules\n\n' +
-        '4️⃣ Save and Exit\n' +
-        '   • Click "Save Configuration"\n' +
-        '   • SmartBag will restart automatically'
-    );
-}
-
-// Show mobile app configuration instructions
-function showMobileAppInstructions() {
-    alert(
-        'SmartBag Mobile App Configuration\n\n' +
-        'Coming Soon Features:\n\n' +
-        '📱 Download the SmartBag App\n' +
-        '   • Available on Google Play & App Store\n' +
-        '   • Search: "SmartBag Organizer"\n\n' +
-        '🔗 Bluetooth Connection\n' +
-        '   • Automatic device discovery\n' +
-        '   • Secure pairing process\n\n' +
-        '⚙️ Easy Configuration\n' +
-        '   • Drag-and-drop item setup\n' +
-        '   • Weekly schedule management\n' +
-        '   • Voice command setup\n\n' +
-        'For now, please use the Web Interface method.'
-    );
 }
 
 // Validate user credentials
