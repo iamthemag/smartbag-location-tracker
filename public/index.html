@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+  <title>Location Tracker - Realtime GPS</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css"
+        integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+  <!-- jQuery must load before Bootstrap JS -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
+          integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl"
+          crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="bg-others">
+  
+  <!-- Loading Overlay for No Device Connected -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-content">
+      <button id="loadingLogoutBtn" class="loading-logout-btn">
+        <i class="fas fa-sign-out-alt"></i> Logout
+      </button>
+      <div class="loading-animation">
+        <div class="loading-circle"></div>
+        <div class="loading-circle"></div>
+        <div class="loading-circle"></div>
+      </div>
+      <h3 class="loading-title">Waiting for SmartBag</h3>
+      <p class="loading-subtitle">No device connected to server</p>
+      <div class="loading-dots">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </div>
+    <div class="container">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">🗺️ SmartBag Tracker - Realtime GPS</h1>
+        <button id="logoutBtn" class="btn btn-outline-light btn-sm">
+          <i class="fas fa-sign-out-alt"></i> Logout
+        </button>
+      </div>
+      <center>
+        <hr style="height:2px; border:none; color:#ffffff; background-color:#ffffff; width:35%; margin: 0 auto;">
+      </center>
+      
+      <div class="row">
+        <div class="col-md-6">
+          <div class="status" id="connectionStatus">
+            <span class="status-indicator offline"></span>
+            <span class="status-text">Disconnected - No Device</span>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <center>
+            <button class="btn btn-danger col-sm-6" id="trackingBtn">Stop Tracking</button>
+          </center>
+        </div>
+      </div>
+      
+      <br>
+      
+      <div class="row">
+        <div class="col-md-6">
+          <div class="location-info">
+            <div class="coordinates" id="coordinates">
+              <span>Waiting for location data...</span>
+            </div>
+            <div class="timestamp" id="timestamp"></div>
+            <div class="accuracy" id="accuracy"></div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div id="directionsPanel" class="directions-panel" style="display: none;">
+            <h5 class="directions-title">
+              <i class="fas fa-route"></i> Turn-by-Turn Directions
+            </h5>
+            <div id="directionsList" class="directions-list">
+              <!-- Directions will be populated here -->
+            </div>
+            <div class="directions-summary" id="directionsSummary">
+              <!-- Summary will be shown here -->
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <br>
+      
+      <div class="row">
+        <div class="col-md-12">
+          <div class="controls">
+            <button id="centerMapBtn" class="btn btn-info">Center Map</button>
+            <button id="directionsBtn" class="btn btn-primary">Get Directions</button>
+            <button id="resetLocationBtn" class="btn btn-secondary">Reset My Location</button>
+            <button id="clearDirectionsBtn" class="btn btn-info">Clear Directions</button>
+          </div>
+        </div>
+      </div>
+      
+      <br>
+      
+      <center>
+        <div id="map-canvas" style="width: 100%; height: 500px;"></div>
+      </center>
+      
+      <div class="stats mt-3">
+        <div class="row">
+          <div class="col-md-6">
+            <span class="label">Total Updates:</span>
+            <span id="updateCount">0</span>
+          </div>
+          <div class="col-md-6">
+            <span class="label">Last Update:</span>
+            <span id="lastUpdate">Never</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Socket.IO -->
+  <script src="/socket.io/socket.io.js"></script>
+  
+  <!-- Custom JavaScript -->
+  <script src="js/app.js"></script>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
+        crossorigin=""/>
+  
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+          
+  <!-- Initialize map after Leaflet loads -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Leaflet is loaded, now initialize map
+      if (window.initializeMap) {
+        initializeMap();
+      }
+    });
+  </script>
+</body>
+</html>

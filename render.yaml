@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: location-tracker-app
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: MAX_HISTORY
+        value: "100"
+      - key: AUTHORIZED_DEVICES
+        value: "raspi-001,raspi-002,raspi-tracker-main,smartbag-device-01"
+      - key: NODE_ENV
+        value: "production"
