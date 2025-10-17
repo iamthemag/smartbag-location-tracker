@@ -9,6 +9,9 @@ const bcrypt = require('bcryptjs');
 const { Client } = require('ssh2');
 const multer = require('multer');
 const fs = require('fs');
+const sharp = require('sharp');
+const archiver = require('archiver');
+const path_module = require('path');
 
 // Load environment variables
 require('dotenv').config();
@@ -76,6 +79,21 @@ const MAX_HISTORY = process.env.MAX_HISTORY || 100; // Keep last N locations
 // Store connected Raspberry Pi devices
 let connectedDevices = new Map(); // deviceId -> socket
 
+// Store user configurations
+let userConfigurations = new Map(); // deviceId -> { qrCodes: [], itemImages: [], completed: false }
+
+// Ensure directories exist
+const ensureDirectories = () => {
+    const dirs = ['uploads', 'qr-codes', 'item-images', 'zip-exports'];
+    dirs.forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+            console.log(`Created directory: ${dir}`);
+        }
+    });
+};
+ensureDirectories();
+
 // Authentication middleware
 function requireAuth(req, res, next) {
     console.log('Auth check - Session:', {
@@ -104,8 +122,8 @@ app.get('/tracker', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/configure', (req, res) => {
-    console.log('Serving configure page');
+app.get('/configure', requireAuth, (req, res) => {
+    console.log('Serving configure page to authenticated user:', req.session.deviceId);
     res.sendFile(path.join(__dirname, 'public', 'configure.html'));
 });
 

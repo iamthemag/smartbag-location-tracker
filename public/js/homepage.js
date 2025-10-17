@@ -56,10 +56,11 @@ function setupLoginForm() {
         .then(data => {
             console.log('Server response data:', data);
             if (data.success) {
-                showSuccess('Login successful! Redirecting...');
+                const redirectTo = loginForm.dataset.redirectTo || 'tracker';
+                showSuccess(`Login successful! Redirecting to ${redirectTo}...`);
                 setTimeout(() => {
-                    // Redirect to location tracker
-                    window.location.href = 'tracker';
+                    // Redirect based on the flag
+                    window.location.href = redirectTo;
                 }, 1500);
             } else {
                 showError(data.message || 'Invalid Device ID or Password');
@@ -79,8 +80,13 @@ function setupHeroConfigureButton() {
     const heroConfigureBtn = document.getElementById('heroConfigureBtn');
     
     heroConfigureBtn.addEventListener('click', function() {
-        // Redirect to configure page
-        window.location.href = '/configure';
+        // Show login modal for configuration access
+        $('#loginModal').modal('show');
+        // Add a flag to indicate this is for configuration
+        document.getElementById('loginForm').dataset.redirectTo = 'configure';
+        // Update modal title
+        document.getElementById('loginModalLabel').innerHTML = 
+            '<i class="fas fa-cog"></i> Access SmartBag Configuration';
     });
 }
 
