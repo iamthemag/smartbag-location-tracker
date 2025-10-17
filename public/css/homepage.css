@@ -112,6 +112,20 @@ body {
 
 .hero-buttons {
     margin-top: 2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.hero-buttons .btn {
+    flex: 0 0 auto;
+}
+
+@media (min-width: 769px) {
+    .hero-buttons {
+        justify-content: flex-start;
+    }
 }
 
 .btn {
@@ -136,6 +150,17 @@ body {
 
 .btn-outline-light {
     border: 2px solid rgba(255,255,255,0.8);
+    color: white;
+}
+
+.btn-success {
+    background: linear-gradient(45deg, #28a745, #1e7e34);
+    border: none;
+    color: white;
+}
+
+.btn-success:hover {
+    background: linear-gradient(45deg, #218838, #155724);
     color: white;
 }
 
@@ -439,12 +464,14 @@ body {
     
     .hero-buttons {
         flex-direction: column;
+        align-items: center;
         gap: 1rem;
         margin-top: 1.5rem;
     }
     
-    .btn {
+    .hero-buttons .btn {
         width: 100%;
+        max-width: 300px;
         padding: 15px 25px;
         font-size: 1rem;
     }

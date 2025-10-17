@@ -45,6 +45,9 @@
                             <button class="btn btn-primary btn-lg me-3" data-toggle="modal" data-target="#loginModal">
                                 <i class="fas fa-map-marker-alt"></i> Track Location
                             </button>
+                            <button class="btn btn-success btn-lg me-3" id="heroConfigureBtn">
+                                <i class="fas fa-cog"></i> Configure Bag Items
+                            </button>
                             <button class="btn btn-outline-light btn-lg" onclick="scrollToFeatures()">
                                 <i class="fas fa-info-circle"></i> Learn More
                             </button>
@@ -181,7 +184,7 @@
             <div class="modal-content bg-dark">
                 <div class="modal-header border-bottom border-secondary">
                     <h5 class="modal-title text-white" id="loginModalLabel">
-                        <i class="fas fa-lock"></i> SmartBag Access
+                        <i class="fas fa-map-marker-alt"></i> Access Location Tracker
                     </h5>
                     <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
@@ -216,10 +219,6 @@
                         <div class="text-center">
                             <button type="submit" class="btn btn-primary btn-block">
                                 <i class="fas fa-sign-in-alt"></i> Access Location Tracker
-                            </button>
-                            <hr class="bg-secondary">
-                            <button type="button" class="btn btn-outline-info btn-block" id="configureBtn">
-                                <i class="fas fa-cog"></i> Configure Bag Items
                             </button>
                         </div>
                     </form>
