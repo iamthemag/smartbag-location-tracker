@@ -1,206 +1,309 @@
-// Global variables
-let sshCredentials = null;
-let uploadHistory = [];
+// Configure page JavaScript for Socket.IO-based QR/Photo workflow
+let socket;
+let deviceId = null;
+let isDeviceConnected = false;
+let qrCodes = [];
+let currentCameraQR = null;
+let cameraStream = null;
 
 // DOM elements
-const connectionForm = document.getElementById('connectionForm');
-const uploadForm = document.getElementById('uploadForm');
-const connectionCard = document.getElementById('connectionCard');
-const uploadCard = document.getElementById('uploadCard');
-const historyCard = document.getElementById('historyCard');
-const photoFileInput = document.getElementById('photoFile');
+const deviceStatus = document.getElementById('deviceStatus');
+const connectionStatus = document.getElementById('connectionStatus');
+const connectionDetails = document.getElementById('connectionDetails');
+const qrGallery = document.getElementById('qrGallery');
+const qrGalleryCard = document.getElementById('qrGalleryCard');
+const cameraCard = document.getElementById('cameraCard');
+const downloadCard = document.getElementById('downloadCard');
+const cameraVideo = document.getElementById('cameraVideo');
+const cameraCanvas = document.getElementById('cameraCanvas');
 const photoPreview = document.getElementById('photoPreview');
 const previewImage = document.getElementById('previewImage');
-const previewText = document.getElementById('previewText');
 
-// Initialize page
+// Initialize when page loads
 document.addEventListener('DOMContentLoaded', function() {
     initializePage();
 });
 
 function initializePage() {
+    console.log('🛠️ Initializing SmartBag Configure Page');
+    
+    // Set up event listeners
     setupEventListeners();
-    loadUploadHistory();
-    console.log('Configure page initialized');
+    
+    // Initialize Socket.IO connection
+    initializeSocket();
+    
+    // Set up logout functionality
+    setupLogout();
 }
 
 function setupEventListeners() {
-    // Connection form
-    connectionForm.addEventListener('submit', handleConnectionTest);
+    // Camera controls
+    document.getElementById('startCameraBtn').addEventListener('click', startCamera);
+    document.getElementById('captureBtn').addEventListener('click', capturePhoto);
+    document.getElementById('retakeBtn').addEventListener('click', retakePhoto);
+    document.getElementById('savePhotoBtn').addEventListener('click', savePhoto);
+    document.getElementById('closeCameraBtn').addEventListener('click', closeCamera);
     
-    // Upload form
-    uploadForm.addEventListener('submit', handlePhotoUpload);
-    
-    // File input change
-    photoFileInput.addEventListener('change', handleFileSelect);
-    
-    // Custom file input label update
-    photoFileInput.addEventListener('change', function() {
-        const fileName = this.files[0]?.name || 'Choose photo...';
-        document.querySelector('.custom-file-label').textContent = fileName;
+    // Download button
+    document.getElementById('downloadZipBtn').addEventListener('click', downloadZip);
+}
+
+function setupLogout() {
+    document.getElementById('logoutBtn').addEventListener('click', function() {
+        if (confirm('Are you sure you want to logout?')) {
+            fetch('/api/logout', { method: 'POST' })
+                .then(() => {
+                    window.location.href = '/';
+                })
+                .catch(error => {
+                    console.error('Logout error:', error);
+                    window.location.href = '/';
+                });
+        }
     });
 }
 
-// Handle SSH connection testing
-async function handleConnectionTest(e) {
-    e.preventDefault();
+function initializeSocket() {
+    console.log('🔌 Connecting to Socket.IO server...');
+    socket = io();
     
-    const hostname = document.getElementById('hostname').value.trim();
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
+    socket.on('connect', function() {
+        console.log('✅ Connected to server');
+        socket.emit('authenticate', { type: 'client' });
+    });
     
-    if (!hostname || !username || !password) {
-        showStatus('connectionStatus', 'Please fill in all fields', 'danger');
-        return;
-    }
+    socket.on('disconnect', function() {
+        console.log('❌ Disconnected from server');
+        updateConnectionStatus(false, 'Disconnected from server');
+    });
     
-    // Show loading state
-    const testBtn = document.getElementById('testConnectionBtn');
-    const originalBtnText = testBtn.innerHTML;
-    testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing Connection...';
-    testBtn.disabled = true;
+    // Authentication required
+    socket.on('authRequired', function() {
+        console.log('🔐 Authentication required');
+        alert('Please login first');
+        window.location.href = '/';
+    });
     
-    try {
-        showStatus('connectionStatus', 'Testing SSH connection...', 'info');
+    // Device connection status
+    socket.on('deviceConnectionStatus', function(data) {
+        console.log('📱 Device connection status:', data);
+        deviceId = data.deviceId;
+        isDeviceConnected = data.connected;
+        updateConnectionStatus(data.connected, data.connected ? `Connected to ${data.deviceId}` : `Waiting for ${data.deviceId} to connect`);
+        updateDeviceStatus(data.connected, data.deviceId);
+    });
+    
+    // Configuration data (existing QR codes)
+    socket.on('configurationData', function(data) {
+        console.log('📋 Configuration data received:', data);
+        qrCodes = data.qrCodes || [];
+        displayQRCodes();
+        updateCompletionStatus();
+    });
+    
+    // New QR code received from Pi
+    socket.on('qrCodeReceived', function(qrData) {
+        console.log('📟 New QR code received:', qrData);
+        qrCodes.push(qrData);
+        displayQRCodes();
+        updateCompletionStatus();
         
-        const response = await fetch('/api/ssh/test', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                hostname,
-                username,
-                password
-            })
-        });
+        // Show notification
+        showNotification(`New QR code received: ${qrData.label}`, 'success');
+    });
+    
+    // Photo uploaded confirmation
+    socket.on('photoUploaded', function(data) {
+        console.log('📷 Photo uploaded:', data);
         
-        const result = await response.json();
-        
-        if (response.ok && result.success) {
-            // Connection successful
-            sshCredentials = { hostname, username, password };
-            showStatus('connectionStatus', 
-                `<i class="fas fa-check-circle status-connected"></i> Connected to ${hostname} successfully!`, 
-                'success'
-            );
-            
-            // Show upload form
-            uploadCard.style.display = 'block';
-            historyCard.style.display = 'block';
-            
-            // Scroll to upload form
-            setTimeout(() => {
-                uploadCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }, 500);
-            
-        } else {
-            // Show detailed error with suggestions
-            let errorHtml = `<i class="fas fa-times-circle status-disconnected"></i> ${result.error}`;
-            
-            if (result.suggestions && result.suggestions.length > 0) {
-                errorHtml += '<br><br><strong>Suggestions:</strong><ul>';
-                result.suggestions.forEach(suggestion => {
-                    errorHtml += `<li>${suggestion}</li>`;
-                });
-                errorHtml += '</ul>';
-            }
-            
-            if (result.errorCode === 'ENOTFOUND') {
-                errorHtml += '<br><br><div class="alert alert-info mt-2"><strong>💡 Quick Fix:</strong> Since you can connect via PuTTY, try using your Pi\'s IP address instead of the hostname. You can find it by running <code>hostname -I</code> on your Pi or check your router\'s admin panel.</div>';
-            }
-            
-            showStatus('connectionStatus', errorHtml, 'danger');
+        // Update QR code status
+        const qr = qrCodes.find(q => q.filename === data.qrFilename);
+        if (qr) {
+            qr.hasPhoto = true;
+            displayQRCodes();
+            updateCompletionStatus();
         }
         
-    } catch (error) {
-        console.error('Connection test error:', error);
-        showStatus('connectionStatus', 
-            `<i class="fas fa-exclamation-triangle status-disconnected"></i> Connection error: ${error.message}`, 
-            'danger'
-        );
-    } finally {
-        // Reset button
-        testBtn.innerHTML = originalBtnText;
-        testBtn.disabled = false;
+        showNotification(`Photo uploaded for ${data.qrFilename}`, 'success');
+    });
+}
+
+function updateConnectionStatus(connected, message) {
+    const statusIcon = connectionStatus.querySelector('i');
+    const statusText = connectionStatus.querySelector('span');
+    
+    if (connected) {
+        statusIcon.className = 'fas fa-circle status-connected';
+        statusText.textContent = message;
+        connectionDetails.textContent = 'Socket.IO connection active';
+    } else {
+        statusIcon.className = 'fas fa-circle status-disconnected';
+        statusText.textContent = message;
+        connectionDetails.textContent = 'Waiting for device connection...';
     }
 }
 
-// Handle file selection and preview
-function handleFileSelect(e) {
-    const file = e.target.files[0];
+function updateDeviceStatus(connected, deviceName) {
+    const deviceStatusIcon = deviceStatus.querySelector('i');
+    const deviceNameSpan = document.getElementById('deviceName');
     
-    if (!file) {
-        photoPreview.style.display = 'none';
+    if (connected) {
+        deviceStatusIcon.className = 'fas fa-circle status-connected';
+        deviceNameSpan.textContent = deviceName;
+    } else {
+        deviceStatusIcon.className = 'fas fa-circle status-disconnected';
+        deviceNameSpan.textContent = `Waiting for ${deviceName || 'device'}`;
+    }
+}
+
+function displayQRCodes() {
+    if (qrCodes.length === 0) {
+        qrGalleryCard.style.display = 'none';
         return;
     }
     
-    // Check file size (5MB limit)
-    const maxSize = 5 * 1024 * 1024; // 5MB
-    if (file.size > maxSize) {
-        showStatus('uploadStatus', 
-            `<i class="fas fa-exclamation-triangle"></i> File too large! Maximum size is 5MB. Your file is ${(file.size / 1024 / 1024).toFixed(2)}MB.`, 
-            'danger'
-        );
-        e.target.value = ''; // Clear file input
-        photoPreview.style.display = 'none';
+    qrGalleryCard.style.display = 'block';
+    
+    const gallery = qrCodes.map(qr => `
+        <div class="qr-item ${qr.hasPhoto ? 'has-photo' : ''}" data-filename="${qr.filename}">
+            <div class="qr-image">
+                <img src="data:image/png;base64,${qr.imageData}" alt="${qr.label}">
+                ${qr.hasPhoto ? '<div class="photo-badge"><i class="fas fa-check"></i></div>' : ''}
+            </div>
+            <div class="qr-info">
+                <h6>${qr.label}</h6>
+                <small class="text-muted">Uploaded: ${new Date(qr.uploadedAt).toLocaleString()}</small>
+            </div>
+            <div class="qr-actions">
+                ${qr.hasPhoto ? 
+                    '<button class="btn btn-sm btn-success" disabled><i class="fas fa-check"></i> Photo Added</button>' :
+                    `<button class="btn btn-sm btn-primary" onclick="takePhotoForQR('${qr.filename}', '${qr.label}')">
+                        <i class="fas fa-camera"></i> Take Photo
+                    </button>`
+                }
+            </div>
+        </div>
+    `).join('');
+    
+    qrGallery.innerHTML = gallery;
+    updateCompletionStatus();
+}
+
+function takePhotoForQR(filename, label) {
+    currentCameraQR = { filename, label };
+    document.getElementById('currentItem').textContent = label;
+    cameraCard.style.display = 'block';
+    
+    // Scroll to camera
+    cameraCard.scrollIntoView({ behavior: 'smooth' });
+    
+    // Reset camera state
+    resetCameraState();
+}
+
+function startCamera() {
+    console.log('📷 Starting camera...');
+    
+    navigator.mediaDevices.getUserMedia({ 
+        video: { 
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            facingMode: 'environment' // Use back camera on mobile
+        } 
+    })
+    .then(function(stream) {
+        cameraStream = stream;
+        cameraVideo.srcObject = stream;
+        cameraVideo.style.display = 'block';
+        
+        // Update button states
+        document.getElementById('startCameraBtn').style.display = 'none';
+        document.getElementById('captureBtn').style.display = 'inline-block';
+        
+        console.log('✅ Camera started successfully');
+    })
+    .catch(function(error) {
+        console.error('❌ Camera error:', error);
+        alert('Failed to access camera: ' + error.message);
+    });
+}
+
+function capturePhoto() {
+    if (!cameraStream) {
+        alert('Camera not started');
         return;
     }
+    
+    const canvas = cameraCanvas;
+    const context = canvas.getContext('2d');
+    
+    // Set canvas dimensions to match video
+    canvas.width = cameraVideo.videoWidth;
+    canvas.height = cameraVideo.videoHeight;
+    
+    // Draw the video frame to canvas
+    context.drawImage(cameraVideo, 0, 0);
+    
+    // Get image data
+    const imageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
     
     // Show preview
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        previewImage.src = e.target.result;
-        previewText.innerHTML = `
-            <strong>File:</strong> ${file.name}<br>
-            <strong>Size:</strong> ${(file.size / 1024 / 1024).toFixed(2)} MB<br>
-            <strong>Type:</strong> ${file.type}
-        `;
-        photoPreview.style.display = 'block';
-    };
-    reader.readAsDataURL(file);
+    previewImage.src = imageDataUrl;
+    photoPreview.style.display = 'block';
     
-    // Clear any previous upload status
-    document.getElementById('uploadStatus').innerHTML = '';
+    // Update photo info
+    document.getElementById('photoInfo').innerHTML = `
+        <strong>Photo captured for:</strong> ${currentCameraQR.label}<br>
+        <strong>Resolution:</strong> ${canvas.width}x${canvas.height}
+    `;
+    
+    // Update button states
+    document.getElementById('captureBtn').style.display = 'none';
+    document.getElementById('retakeBtn').style.display = 'inline-block';
+    document.getElementById('savePhotoBtn').style.display = 'inline-block';
+    
+    // Hide video
+    cameraVideo.style.display = 'none';
 }
 
-// Handle photo upload
-async function handlePhotoUpload(e) {
-    e.preventDefault();
+function retakePhoto() {
+    // Show video again
+    cameraVideo.style.display = 'block';
+    photoPreview.style.display = 'none';
     
-    if (!sshCredentials) {
-        showStatus('uploadStatus', 'Please connect to Raspberry Pi first', 'danger');
+    // Update button states
+    document.getElementById('captureBtn').style.display = 'inline-block';
+    document.getElementById('retakeBtn').style.display = 'none';
+    document.getElementById('savePhotoBtn').style.display = 'none';
+}
+
+async function savePhoto() {
+    if (!currentCameraQR) {
+        alert('No QR code selected');
         return;
     }
     
-    const itemName = document.getElementById('itemName').value.trim();
-    const day = document.getElementById('day').value;
-    const photoFile = photoFileInput.files[0];
-    
-    if (!itemName || !day || !photoFile) {
-        showStatus('uploadStatus', 'Please fill in all fields and select a photo', 'danger');
-        return;
-    }
-    
-    // Show loading state
-    const uploadBtn = document.getElementById('uploadBtn');
-    const originalBtnText = uploadBtn.innerHTML;
-    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-    uploadBtn.disabled = true;
-    
-    // Create FormData
-    const formData = new FormData();
-    formData.append('photo', photoFile);
-    formData.append('hostname', sshCredentials.hostname);
-    formData.append('username', sshCredentials.username);
-    formData.append('password', sshCredentials.password);
-    formData.append('itemName', itemName);
-    formData.append('day', day);
+    const canvas = cameraCanvas;
     
     try {
-        showStatus('uploadStatus', 'Uploading photo to Raspberry Pi...', 'info');
+        // Show loading
+        const saveBtn = document.getElementById('savePhotoBtn');
+        const originalText = saveBtn.innerHTML;
+        saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+        saveBtn.disabled = true;
         
-        const response = await fetch('/api/ssh/upload-photo', {
+        // Convert canvas to blob
+        const blob = await new Promise(resolve => {
+            canvas.toBlob(resolve, 'image/jpeg', 0.85);
+        });
+        
+        // Create form data
+        const formData = new FormData();
+        formData.append('photo', blob, `${currentCameraQR.filename}.jpg`);
+        
+        // Upload photo
+        const response = await fetch(`/api/upload-photo/${currentCameraQR.filename}`, {
             method: 'POST',
             body: formData
         });
@@ -208,148 +311,111 @@ async function handlePhotoUpload(e) {
         const result = await response.json();
         
         if (response.ok && result.success) {
-            showStatus('uploadStatus', 
-                `<i class="fas fa-check-circle"></i> Photo uploaded successfully!<br><small>Saved as: ${result.remotePath}</small>`, 
-                'success'
-            );
+            showNotification(`Photo saved successfully! Size: ${(result.size / 1024).toFixed(1)}KB`, 'success');
+            closeCamera();
             
-            // Add to upload history
-            const historyItem = {
-                itemName,
-                day,
-                fileName: photoFile.name,
-                remotePath: result.remotePath,
-                timestamp: new Date().toLocaleString(),
-                size: (photoFile.size / 1024 / 1024).toFixed(2) + ' MB'
-            };
-            
-            uploadHistory.unshift(historyItem);
-            saveUploadHistory();
-            updateUploadHistoryDisplay();
-            
-            // Reset form
-            uploadForm.reset();
-            document.querySelector('.custom-file-label').textContent = 'Choose photo...';
-            photoPreview.style.display = 'none';
-            
+            // Update QR code display
+            const qr = qrCodes.find(q => q.filename === currentCameraQR.filename);
+            if (qr) {
+                qr.hasPhoto = true;
+                displayQRCodes();
+            }
         } else {
-            showStatus('uploadStatus', 
-                `<i class="fas fa-times-circle"></i> Upload failed: ${result.error}`, 
-                'danger'
-            );
+            throw new Error(result.error || 'Upload failed');
         }
         
     } catch (error) {
-        console.error('Upload error:', error);
-        showStatus('uploadStatus', 
-            `<i class="fas fa-exclamation-triangle"></i> Upload error: ${error.message}`, 
-            'danger'
-        );
-    } finally {
+        console.error('Photo save error:', error);
+        showNotification(`Failed to save photo: ${error.message}`, 'error');
+        
         // Reset button
-        uploadBtn.innerHTML = originalBtnText;
-        uploadBtn.disabled = false;
+        const saveBtn = document.getElementById('savePhotoBtn');
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
     }
 }
 
-// Show status messages
-function showStatus(elementId, message, type) {
-    const statusElement = document.getElementById(elementId);
-    const alertClass = `alert alert-${type}`;
+function closeCamera() {
+    // Stop camera stream
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
     
-    statusElement.innerHTML = `
-        <div class="${alertClass}">
-            ${message}
-        </div>
+    // Hide camera interface
+    cameraCard.style.display = 'none';
+    resetCameraState();
+    currentCameraQR = null;
+}
+
+function resetCameraState() {
+    cameraVideo.style.display = 'none';
+    photoPreview.style.display = 'none';
+    
+    // Reset buttons
+    document.getElementById('startCameraBtn').style.display = 'inline-block';
+    document.getElementById('captureBtn').style.display = 'none';
+    document.getElementById('retakeBtn').style.display = 'none';
+    document.getElementById('savePhotoBtn').style.display = 'none';
+}
+
+function updateCompletionStatus() {
+    const totalQRs = qrCodes.length;
+    const completedQRs = qrCodes.filter(qr => qr.hasPhoto).length;
+    const percentage = totalQRs > 0 ? Math.round((completedQRs / totalQRs) * 100) : 0;
+    
+    // Update progress bar
+    const progressBar = document.getElementById('completionProgress');
+    progressBar.style.width = `${percentage}%`;
+    progressBar.textContent = `${percentage}%`;
+    
+    // Update text
+    document.getElementById('completionText').textContent = `${completedQRs} of ${totalQRs} items configured`;
+    
+    // Show download card if we have QR codes
+    if (totalQRs > 0) {
+        downloadCard.style.display = 'block';
+    }
+    
+    // Enable download button if all completed
+    const downloadBtn = document.getElementById('downloadZipBtn');
+    if (completedQRs === totalQRs && totalQRs > 0) {
+        downloadBtn.disabled = false;
+        document.getElementById('completionStatus').textContent = 'Configuration Complete!';
+    } else {
+        downloadBtn.disabled = true;
+        document.getElementById('completionStatus').textContent = 'Configuration in Progress';
+    }
+}
+
+function downloadZip() {
+    window.location.href = '/api/download-zip';
+    showNotification('Starting download...', 'info');
+}
+
+function showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type} notification`;
+    notification.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'times' : 'info'}"></i>
+        ${message}
     `;
     
-    // Auto-hide success messages after 5 seconds
-    if (type === 'success') {
-        setTimeout(() => {
-            statusElement.innerHTML = '';
-        }, 5000);
-    }
-}
-
-// Upload history management
-function loadUploadHistory() {
-    const saved = localStorage.getItem('smartbag_upload_history');
-    if (saved) {
-        try {
-            uploadHistory = JSON.parse(saved);
-            updateUploadHistoryDisplay();
-        } catch (e) {
-            console.error('Error loading upload history:', e);
-            uploadHistory = [];
+    // Add to page
+    document.body.appendChild(notification);
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.remove();
         }
-    }
-}
-
-function saveUploadHistory() {
-    try {
-        // Keep only last 20 items
-        const historyToSave = uploadHistory.slice(0, 20);
-        localStorage.setItem('smartbag_upload_history', JSON.stringify(historyToSave));
-    } catch (e) {
-        console.error('Error saving upload history:', e);
-    }
-}
-
-function updateUploadHistoryDisplay() {
-    const historyContainer = document.getElementById('uploadHistory');
+    }, 5000);
     
-    if (uploadHistory.length === 0) {
-        historyContainer.innerHTML = '<p class="text-muted text-center">No uploads yet</p>';
-        return;
-    }
-    
-    const historyHTML = uploadHistory.map(item => `
-        <div class="history-item">
-            <h6><i class="fas fa-image"></i> ${item.itemName}</h6>
-            <p class="mb-1">
-                <strong>Day:</strong> ${item.day} | 
-                <strong>Size:</strong> ${item.size}
-            </p>
-            <small class="text-muted">
-                <i class="fas fa-clock"></i> ${item.timestamp}<br>
-                <i class="fas fa-folder"></i> ${item.remotePath}
-            </small>
-        </div>
-    `).join('');
-    
-    historyContainer.innerHTML = historyHTML;
+    console.log(`📢 ${type.toUpperCase()}: ${message}`);
 }
 
-// Utility functions
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
+// Global function for QR buttons (called from HTML)
+window.takePhotoForQR = takePhotoForQR;
 
-// Handle page visibility for connection management
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        console.log('Configure page hidden');
-    } else {
-        console.log('Configure page visible');
-    }
-});
-
-// Error handling for fetch requests
-window.addEventListener('unhandledrejection', function(event) {
-    console.error('Unhandled promise rejection:', event.reason);
-    showStatus('connectionStatus', 
-        `<i class="fas fa-exclamation-triangle"></i> An unexpected error occurred: ${event.reason?.message || 'Unknown error'}`, 
-        'danger'
-    );
-});
-
-// Console welcome message
-console.log(`
-🛠️ SmartBag Configuration Interface
-📡 SSH Connection & Photo Upload System
-🔧 Ready to configure your SmartBag items!
-`);
+console.log('🎯 Configure page JavaScript loaded');

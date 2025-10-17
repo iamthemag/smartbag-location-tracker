@@ -22,17 +22,9 @@ const app = express();
 app.set('trust proxy', 1);
 
 const server = http.createServer(app);
-const io = socketIO(server, {
-    cors: {
-        origin: process.env.NODE_ENV === 'production' 
-            ? ["https://location-tracker-app-waa4.onrender.com"] 
-            : "*",
-        methods: ["GET", "POST"]
-    }
-});
 
-// Session configuration (only one instance needed)
-app.use(session({
+// Session configuration
+const sessionMiddleware = session({
     secret: process.env.SESSION_SECRET || 'smartbag-secret-key-2024',
     resave: false,
     saveUninitialized: false,
@@ -43,7 +35,29 @@ app.use(session({
         sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
     },
     name: 'smartbag-session'
-}));
+});
+const io = socketIO(server, {
+    cors: {
+        origin: process.env.NODE_ENV === 'production' 
+            ? ["https://location-tracker-app-waa4.onrender.com"] 
+            : "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+// Share session with Socket.IO
+io.use((socket, next) => {
+    sessionMiddleware(socket.request, {}, next);
+});
+
+// Make session accessible in handshake
+io.use((socket, next) => {
+    socket.handshake.session = socket.request.session;
+    next();
+});
+
+// Use the shared session middleware
+app.use(sessionMiddleware);
 
 // Middleware
 app.use(cors());
@@ -93,6 +107,26 @@ const ensureDirectories = () => {
     });
 };
 ensureDirectories();
+
+// Helper functions
+function extractLabelFromFilename(filename) {
+    // Extract label from filename like "Monday_Keys.png" -> "Monday - Keys"
+    const nameWithoutExt = filename.replace(/\.[^/.]+$/, "");
+    const parts = nameWithoutExt.split('_');
+    if (parts.length >= 2) {
+        return `${parts[0]} - ${parts.slice(1).join(' ')}`;
+    }
+    return nameWithoutExt;
+}
+
+function broadcastToWebClients(deviceId, event, data) {
+    // Broadcast to web clients that are authenticated for this device
+    io.sockets.sockets.forEach((socket) => {
+        if (socket.deviceType === 'client' && socket.authenticatedDeviceId === deviceId) {
+            socket.emit(event, data);
+        }
+    });
+}
 
 // Authentication middleware
 function requireAuth(req, res, next) {
@@ -375,6 +409,207 @@ app.post('/api/ssh/upload-photo', upload.single('photo'), (req, res) => {
     });
 });
 
+// Photo upload endpoint for web clients
+app.post('/api/upload-photo/:qrFilename', upload.single('photo'), async (req, res) => {
+    try {
+        if (!req.session || !req.session.authenticated) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+        
+        const deviceId = req.session.deviceId;
+        const qrFilename = req.params.qrFilename;
+        const file = req.file;
+        
+        if (!file) {
+            return res.status(400).json({ error: 'No photo uploaded' });
+        }
+        
+        console.log(`📷 Photo upload for ${deviceId}, QR: ${qrFilename}`);
+        
+        // Get user configuration
+        const userConfig = userConfigurations.get(deviceId);
+        if (!userConfig) {
+            return res.status(404).json({ error: 'No QR codes found for this device' });
+        }
+        
+        // Find the matching QR code
+        const qrCode = userConfig.qrCodes.find(qr => qr.filename === qrFilename);
+        if (!qrCode) {
+            return res.status(404).json({ error: 'QR code not found' });
+        }
+        
+        // Generate filename based on QR code name (same name, different extension)
+        const photoFilename = qrFilename.replace(/\.[^/.]+$/, '.jpg');
+        
+        // Compress image using Sharp
+        const compressedBuffer = await sharp(file.path)
+            .jpeg({ quality: 85 })
+            .resize({ width: 1920, height: 1080, fit: 'inside', withoutEnlargement: true })
+            .toBuffer();
+        
+        // Ensure compressed size is under 5MB
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        let finalBuffer = compressedBuffer;
+        let quality = 85;
+        
+        while (finalBuffer.length > maxSize && quality > 20) {
+            quality -= 10;
+            finalBuffer = await sharp(file.path)
+                .jpeg({ quality })
+                .resize({ width: 1920, height: 1080, fit: 'inside', withoutEnlargement: true })
+                .toBuffer();
+        }
+        
+        // Save compressed photo
+        const photoPath = path_module.join('item-images', deviceId);
+        if (!fs.existsSync(photoPath)) {
+            fs.mkdirSync(photoPath, { recursive: true });
+        }
+        
+        const photoFilePath = path_module.join(photoPath, photoFilename);
+        fs.writeFileSync(photoFilePath, finalBuffer);
+        
+        // Update user configuration
+        const photoData = {
+            filename: photoFilename,
+            qrFilename: qrFilename,
+            filePath: photoFilePath,
+            compressedData: finalBuffer.toString('base64'),
+            uploadedAt: new Date().toISOString(),
+            size: finalBuffer.length,
+            compressed: true
+        };
+        
+        userConfig.itemImages.push(photoData);
+        qrCode.hasPhoto = true;
+        
+        // Clean up original uploaded file
+        fs.unlinkSync(file.path);
+        
+        // Send photo to Pi immediately
+        const deviceSocket = connectedDevices.get(deviceId);
+        if (deviceSocket) {
+            deviceSocket.emit('photoData', {
+                filename: photoFilename,
+                data: photoData.compressedData,
+                originalQR: qrFilename
+            });
+        }
+        
+        // Broadcast update to web clients
+        broadcastToWebClients(deviceId, 'photoUploaded', {
+            qrFilename: qrFilename,
+            photoFilename: photoFilename,
+            size: finalBuffer.length
+        });
+        
+        res.json({
+            success: true,
+            message: 'Photo uploaded and compressed successfully',
+            filename: photoFilename,
+            size: finalBuffer.length,
+            sentToPi: !!deviceSocket
+        });
+        
+    } catch (error) {
+        console.error('Photo upload error:', error);
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        res.status(500).json({ error: 'Photo upload failed: ' + error.message });
+    }
+});
+
+// Get user configuration endpoint
+app.get('/api/user-config', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const userConfig = userConfigurations.get(deviceId);
+    
+    if (!userConfig) {
+        return res.json({ qrCodes: [], itemImages: [], completed: false });
+    }
+    
+    // Don't send full base64 data, just metadata
+    const sanitizedConfig = {
+        qrCodes: userConfig.qrCodes.map(qr => ({
+            filename: qr.filename,
+            label: qr.label,
+            uploadedAt: qr.uploadedAt,
+            hasPhoto: qr.hasPhoto
+        })),
+        itemImages: userConfig.itemImages.map(img => ({
+            filename: img.filename,
+            qrFilename: img.qrFilename,
+            uploadedAt: img.uploadedAt,
+            size: img.size
+        })),
+        completed: userConfig.completed
+    };
+    
+    res.json(sanitizedConfig);
+});
+
+// Download ZIP endpoint
+app.get('/api/download-zip', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const userConfig = userConfigurations.get(deviceId);
+    
+    if (!userConfig || userConfig.qrCodes.length === 0) {
+        return res.status(404).json({ error: 'No configuration data found' });
+    }
+    
+    const zipFilename = `smartbag-config-${deviceId}-${Date.now()}.zip`;
+    const zipPath = path_module.join('zip-exports', zipFilename);
+    
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    const stream = fs.createWriteStream(zipPath);
+    
+    archive.pipe(stream);
+    
+    // Add QR codes to ZIP
+    userConfig.qrCodes.forEach(qr => {
+        if (fs.existsSync(qr.filePath)) {
+            archive.file(qr.filePath, { name: `qr-codes/${qr.filename}` });
+        }
+    });
+    
+    // Add item photos to ZIP
+    userConfig.itemImages.forEach(img => {
+        if (fs.existsSync(img.filePath)) {
+            archive.file(img.filePath, { name: `item-photos/${img.filename}` });
+        }
+    });
+    
+    archive.finalize();
+    
+    stream.on('close', () => {
+        // Send the ZIP file
+        res.download(zipPath, zipFilename, (err) => {
+            if (!err) {
+                // Clean up ZIP file after download
+                setTimeout(() => {
+                    if (fs.existsSync(zipPath)) {
+                        fs.unlinkSync(zipPath);
+                    }
+                }, 60000); // Delete after 1 minute
+            }
+        });
+    });
+    
+    archive.on('error', (err) => {
+        console.error('ZIP creation error:', err);
+        res.status(500).json({ error: 'Failed to create ZIP file' });
+    });
+});
+
 // Static file middleware AFTER specific routes
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -517,24 +752,124 @@ io.on('connection', (socket) => {
                 }
             });
             
-        } else {
-            // This is a web client
-            socket.deviceType = 'client';
-            console.log('Web client connected:', socket.id);
-            
-            // Send current location to newly connected web client
-            if (currentLocation.latitude && currentLocation.longitude) {
-                socket.emit('locationUpdate', currentLocation);
-            }
-            
-            // Send location history
-            socket.emit('locationHistory', locationHistory);
-            
-            // Send device status
-            socket.emit('deviceStatus', {
-                connectedDevices: Array.from(connectedDevices.keys()),
-                totalDevices: connectedDevices.size
+            // Handle QR code upload from Pi
+            socket.on('qrUpload', (data) => {
+                if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
+                    console.log(`📟 QR upload from ${socket.deviceId}:`, data.filename);
+                    
+                    // Initialize user configuration if not exists
+                    if (!userConfigurations.has(socket.deviceId)) {
+                        userConfigurations.set(socket.deviceId, {
+                            qrCodes: [],
+                            itemImages: [],
+                            completed: false
+                        });
+                    }
+                    
+                    const userConfig = userConfigurations.get(socket.deviceId);
+                    
+                    // Save QR code data
+                    const qrData = {
+                        filename: data.filename,
+                        data: data.imageData, // base64 image data
+                        label: data.label || extractLabelFromFilename(data.filename),
+                        uploadedAt: new Date().toISOString(),
+                        hasPhoto: false
+                    };
+                    
+                    // Save QR code to filesystem
+                    const qrPath = path_module.join('qr-codes', socket.deviceId);
+                    if (!fs.existsSync(qrPath)) {
+                        fs.mkdirSync(qrPath, { recursive: true });
+                    }
+                    
+                    const qrFilePath = path_module.join(qrPath, data.filename);
+                    const buffer = Buffer.from(data.imageData, 'base64');
+                    fs.writeFileSync(qrFilePath, buffer);
+                    
+                    qrData.filePath = qrFilePath;
+                    userConfig.qrCodes.push(qrData);
+                    
+                    // Broadcast to web clients for this device
+                    broadcastToWebClients(socket.deviceId, 'qrCodeReceived', qrData);
+                    
+                    socket.emit('qrUploadAck', { success: true, filename: data.filename });
+                } else {
+                    socket.emit('qrUploadError', { error: 'Unauthorized QR upload' });
+                }
             });
+            
+            // Handle photo request from Pi
+            socket.on('requestPhotos', () => {
+                if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
+                    const userConfig = userConfigurations.get(socket.deviceId);
+                    if (userConfig) {
+                        // Send all available photos back to Pi
+                        const photosToSend = userConfig.itemImages.filter(img => img.compressed);
+                        photosToSend.forEach(photo => {
+                            socket.emit('photoData', {
+                                filename: photo.filename,
+                                data: photo.compressedData,
+                                originalQR: photo.qrFilename
+                            });
+                        });
+                        socket.emit('photoTransferComplete', { count: photosToSend.length });
+                    }
+                }
+            });
+            
+        } else {
+            // This is a web client - check if authenticated
+            if (socket.handshake.session && socket.handshake.session.authenticated) {
+                socket.deviceType = 'client';
+                socket.authenticatedDeviceId = socket.handshake.session.deviceId;
+                console.log('Authenticated web client connected:', socket.id, 'for device:', socket.authenticatedDeviceId);
+                
+                // Send current location to newly connected web client
+                if (currentLocation.latitude && currentLocation.longitude) {
+                    socket.emit('locationUpdate', currentLocation);
+                }
+                
+                // Send location history
+                socket.emit('locationHistory', locationHistory);
+                
+                // Send device status
+                socket.emit('deviceStatus', {
+                    connectedDevices: Array.from(connectedDevices.keys()),
+                    totalDevices: connectedDevices.size
+                });
+                
+                // Send current configuration data
+                const userConfig = userConfigurations.get(socket.authenticatedDeviceId);
+                if (userConfig) {
+                    socket.emit('configurationData', {
+                        qrCodes: userConfig.qrCodes.map(qr => ({
+                            filename: qr.filename,
+                            label: qr.label,
+                            uploadedAt: qr.uploadedAt,
+                            hasPhoto: qr.hasPhoto,
+                            imageData: qr.data // Send base64 data for display
+                        })),
+                        itemImages: userConfig.itemImages.map(img => ({
+                            filename: img.filename,
+                            qrFilename: img.qrFilename,
+                            uploadedAt: img.uploadedAt,
+                            size: img.size
+                        }))
+                    });
+                }
+                
+                // Check if device is currently connected
+                const isDeviceConnected = connectedDevices.has(socket.authenticatedDeviceId);
+                socket.emit('deviceConnectionStatus', {
+                    connected: isDeviceConnected,
+                    deviceId: socket.authenticatedDeviceId
+                });
+            } else {
+                socket.deviceType = 'client';
+                console.log('Unauthenticated web client connected:', socket.id);
+                socket.emit('authRequired');
+            }
         }
     });
     
