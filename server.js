@@ -15,7 +15,7 @@ const server = http.createServer(app);
 const io = socketIO(server, {
     cors: {
         origin: process.env.NODE_ENV === 'production' 
-            ? ["https://location-tracker-app.onrender.com"] 
+            ? ["https://location-tracker-app-waa4.onrender.com"] 
             : "*",
         methods: ["GET", "POST"]
     }
@@ -231,10 +231,11 @@ function updateLocationData(locationData) {
     io.emit('locationUpdate', currentLocation);
 }
 
-// API endpoint to get Google Maps API key
+// API endpoint to get app configuration
 app.get('/api/config', (req, res) => {
     res.json({
-        googleMapsApiKey: GOOGLE_MAPS_API_KEY
+        mapProvider: 'leaflet',
+        version: '1.0.0'
     });
 });
 
@@ -352,7 +353,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 server.listen(PORT, () => {
     console.log(`Location Tracker Server running on port ${PORT}`);

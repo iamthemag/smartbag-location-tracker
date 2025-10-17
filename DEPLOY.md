@@ -5,7 +5,7 @@ This guide walks you through deploying your location tracker app to Render.com.
 ## Prerequisites
 
 1. **GitHub Repository**: Your code must be in a GitHub repository
-2. **Google Maps API Key**: Get one from [Google Cloud Console](https://console.cloud.google.com/google/maps-apis/)
+2. **No API Keys Required**: This app uses free OpenStreetMap tiles!
 3. **Render.com Account**: Sign up at [render.com](https://render.com)
 
 ## Step 1: Prepare Your Repository
@@ -50,8 +50,8 @@ This guide walks you through deploying your location tracker app to Render.com.
 In your Render service settings, add these environment variables:
 
 ### Required Variables
-- **GOOGLE_MAPS_API_KEY**: Your Google Maps API key
 - **PORT**: Automatically set by Render (don't manually set this)
+- **No API keys required!** 🎉
 
 ### Optional Variables
 - **MAX_HISTORY**: `100` (number of location points to keep)
@@ -67,7 +67,7 @@ In your Render service settings, add these environment variables:
 ## Step 4: Update Your Domain References
 
 After deployment, your app will be available at:
-`https://location-tracker-app.onrender.com`
+`https://location-tracker-app-waa4.onrender.com`
 
 ### Update CORS Origins (if needed)
 The code is already configured to handle production URLs, but if you change the service name, update the CORS origin in `server.js`:
@@ -84,22 +84,22 @@ Update your Raspberry Pi client code to use the new URL:
 
 ```python
 # In your Python GPS client
-SERVER_URL = "https://location-tracker-app.onrender.com/api/location"
+SERVER_URL = "https://location-tracker-app-waa4.onrender.com/api/location"
 ```
 
 Or for Socket.IO connections:
 ```python
 import socketio
 sio = socketio.Client()
-sio.connect('https://location-tracker-app.onrender.com')
+sio.connect('https://location-tracker-app-waa4.onrender.com')
 ```
 
 ## Step 6: Test Your Deployment
 
-1. **Visit your app**: Go to `https://location-tracker-app.onrender.com`
+1. **Visit your app**: Go to `https://location-tracker-app-waa4.onrender.com`
 2. **Test API endpoint**: 
    ```bash
-   curl -X POST https://location-tracker-app.onrender.com/api/location \
+   curl -X POST https://location-tracker-app-waa4.onrender.com/api/location \
         -H "Content-Type: application/json" \
         -d '{"latitude": 40.7128, "longitude": -74.0060, "accuracy": 5.0, "deviceId": "test-device"}'
    ```
@@ -121,7 +121,7 @@ To use a custom domain:
 ### Environment Variables Security
 - Never commit `.env` files to GitHub
 - Use Render's environment variable system for secrets
-- Google Maps API key should be restricted to your domain
+- This app doesn't require API keys - uses free map tiles! 🎉
 
 ## Troubleshooting
 

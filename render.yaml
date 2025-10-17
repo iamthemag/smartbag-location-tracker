@@ -9,8 +9,6 @@ services:
     envVars:
       - key: PORT
         sync: false
-      - key: GOOGLE_MAPS_API_KEY
-        sync: false
       - key: MAX_HISTORY
         value: "100"
       - key: AUTHORIZED_DEVICES
