@@ -74,13 +74,13 @@ function setupLoginForm() {
     });
 }
 
-// Setup hero configure button (placeholder)
+// Setup hero configure button
 function setupHeroConfigureButton() {
     const heroConfigureBtn = document.getElementById('heroConfigureBtn');
     
     heroConfigureBtn.addEventListener('click', function() {
-        // Placeholder - will be implemented later
-        alert('Configure Bag Items feature will be implemented soon!');
+        // Redirect to configure page
+        window.location.href = '/configure';
     });
 }
 

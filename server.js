@@ -6,6 +6,9 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
+const { Client } = require('ssh2');
+const multer = require('multer');
+const fs = require('fs');
 
 // Load environment variables
 require('dotenv').config();
@@ -101,6 +104,11 @@ app.get('/tracker', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/configure', (req, res) => {
+    console.log('Serving configure page');
+    res.sendFile(path.join(__dirname, 'public', 'configure.html'));
+});
+
 // Debug route (remove in production)
 app.get('/debug/session', (req, res) => {
     res.json({
@@ -175,6 +183,118 @@ app.get('/api/auth-status', (req, res) => {
     } else {
         res.json({ authenticated: false });
     }
+});
+
+// Configure multer for file uploads
+const upload = multer({
+    dest: 'uploads/',
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: (req, file, cb) => {
+        // Check if file is an image
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed!'), false);
+        }
+    }
+});
+
+// SSH connection testing endpoint
+app.post('/api/ssh/test', (req, res) => {
+    const { hostname, username, password } = req.body;
+    
+    if (!hostname || !username || !password) {
+        return res.status(400).json({ error: 'All fields are required' });
+    }
+    
+    const conn = new Client();
+    
+    conn.on('ready', () => {
+        console.log(`SSH connection ready to ${hostname}`);
+        conn.end();
+        res.json({ success: true, message: 'SSH connection successful' });
+    }).on('error', (err) => {
+        console.error('SSH connection error:', err.message);
+        res.status(500).json({ error: 'SSH connection failed: ' + err.message });
+    }).connect({
+        host: hostname,
+        username: username,
+        password: password,
+        timeout: 10000
+    });
+});
+
+// Photo upload endpoint
+app.post('/api/ssh/upload-photo', upload.single('photo'), (req, res) => {
+    const { hostname, username, password, itemName, day } = req.body;
+    const file = req.file;
+    
+    if (!hostname || !username || !password || !itemName || !day || !file) {
+        return res.status(400).json({ error: 'All fields and photo are required' });
+    }
+    
+    const conn = new Client();
+    
+    conn.on('ready', () => {
+        console.log(`SSH connection ready for photo upload to ${hostname}`);
+        
+        // Create the items directory if it doesn't exist
+        conn.exec('mkdir -p ~/Desktop/items', (err, stream) => {
+            if (err) {
+                conn.end();
+                return res.status(500).json({ error: 'Failed to create directory: ' + err.message });
+            }
+            
+            stream.on('close', () => {
+                // Upload the file
+                const remotePath = `~/Desktop/items/${day}_${itemName}_${Date.now()}.jpg`;
+                
+                conn.sftp((err, sftp) => {
+                    if (err) {
+                        conn.end();
+                        return res.status(500).json({ error: 'SFTP error: ' + err.message });
+                    }
+                    
+                    const readStream = fs.createReadStream(file.path);
+                    const writeStream = sftp.createWriteStream(remotePath);
+                    
+                    writeStream.on('close', () => {
+                        console.log(`Photo uploaded successfully: ${remotePath}`);
+                        // Clean up local file
+                        fs.unlinkSync(file.path);
+                        conn.end();
+                        res.json({ 
+                            success: true, 
+                            message: 'Photo uploaded successfully',
+                            remotePath: remotePath
+                        });
+                    }).on('error', (err) => {
+                        fs.unlinkSync(file.path);
+                        conn.end();
+                        res.status(500).json({ error: 'Upload failed: ' + err.message });
+                    });
+                    
+                    readStream.pipe(writeStream);
+                });
+            }).on('error', (err) => {
+                conn.end();
+                res.status(500).json({ error: 'Directory creation failed: ' + err.message });
+            });
+        });
+    }).on('error', (err) => {
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        console.error('SSH connection error:', err.message);
+        res.status(500).json({ error: 'SSH connection failed: ' + err.message });
+    }).connect({
+        host: hostname,
+        username: username,
+        password: password,
+        timeout: 10000
+    });
 });
 
 // Static file middleware AFTER specific routes

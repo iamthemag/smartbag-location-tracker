@@ -1,0 +1,2 @@
+# This file ensures the uploads directory is preserved in git
+# Temporary uploaded files will be stored here before being sent to Raspberry Pi
