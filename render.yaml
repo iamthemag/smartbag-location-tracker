@@ -15,3 +15,5 @@ services:
         value: "raspi-001,raspi-002,raspi-tracker-main,smartbag-device-01"
       - key: NODE_ENV
         value: "production"
+      - key: SESSION_SECRET
+        generateValue: true

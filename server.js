@@ -11,6 +11,10 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 const app = express();
+
+// Trust proxy for Render deployment
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 const io = socketIO(server, {
     cors: {
@@ -21,26 +25,18 @@ const io = socketIO(server, {
     }
 });
 
-// Session configuration
+// Session configuration (only one instance needed)
 app.use(session({
-    secret: 'smartbag-secret-key-2024',
+    secret: process.env.SESSION_SECRET || 'smartbag-secret-key-2024',
     resave: false,
     saveUninitialized: false,
     cookie: {
         secure: process.env.NODE_ENV === 'production', // Use HTTPS in production
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
-}));
-
-// Session configuration
-app.use(session({
-    secret: 'smartbag-secret-key-2024',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        secure: process.env.NODE_ENV === 'production', // Use HTTPS in production
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+    },
+    name: 'smartbag-session'
 }));
 
 // Middleware
@@ -79,9 +75,17 @@ let connectedDevices = new Map(); // deviceId -> socket
 
 // Authentication middleware
 function requireAuth(req, res, next) {
+    console.log('Auth check - Session:', {
+        sessionID: req.sessionID,
+        authenticated: req.session?.authenticated,
+        deviceId: req.session?.deviceId
+    });
+    
     if (req.session && req.session.authenticated) {
+        console.log('✅ User authenticated, proceeding to tracker');
         return next();
     } else {
+        console.log('❌ User not authenticated, redirecting to homepage');
         return res.redirect('/');
     }
 }
@@ -95,6 +99,16 @@ app.get('/', (req, res) => {
 app.get('/tracker', requireAuth, (req, res) => {
     console.log('Serving tracker page to authenticated user');
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Debug route (remove in production)
+app.get('/debug/session', (req, res) => {
+    res.json({
+        sessionID: req.sessionID,
+        authenticated: req.session?.authenticated,
+        deviceId: req.session?.deviceId,
+        cookie: req.session?.cookie
+    });
 });
 
 // Login endpoint
