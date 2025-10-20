@@ -195,8 +195,8 @@ app.get('/tracker', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/configure', requireAuth, (req, res) => {
-    console.log('Serving configure page to authenticated user:', req.session.deviceId);
+app.get('/configure', (req, res) => {
+    console.log('Serving configure page (no auth required)');
     res.sendFile(path.join(__dirname, 'public', 'configure.html'));
 });
 
@@ -531,6 +531,78 @@ app.get('/api/download-qr-pdf', (req, res) => {
         res.sendFile(path_module.resolve(pdfPath));
     } else {
         res.status(404).json({ error: 'QR PDF file not found on server' });
+    }
+});
+
+// Public PDF listing endpoint (no authentication required)
+app.get('/api/public-pdfs', (req, res) => {
+    console.log('📋 Public PDF listing request');
+    const allPdfs = [];
+    
+    // Iterate through all user configurations
+    for (const [deviceId, userConfig] of userConfigurations.entries()) {
+        if (userConfig.qrPdf) {
+            allPdfs.push({
+                deviceId: deviceId,
+                filename: userConfig.qrPdf.filename,
+                uploadedAt: userConfig.qrPdf.uploadedAt,
+                qrCount: userConfig.qrCodes.length,
+                fileSize: userConfig.qrPdf.fileSize,
+                qrCodes: userConfig.qrCodes.map(qr => ({
+                    filename: qr.filename,
+                    label: qr.label,
+                    uploadedAt: qr.uploadedAt,
+                    imageData: qr.imageData
+                }))
+            });
+        }
+    }
+    
+    // Also include PDF history
+    const historyPdfs = [];
+    for (const [deviceId, deviceHistory] of pdfHistory.entries()) {
+        if (deviceHistory.length > 0) {
+            deviceHistory.forEach(historyItem => {
+                historyPdfs.push({
+                    deviceId: deviceId,
+                    filename: historyItem.filename,
+                    uploadedAt: historyItem.uploadedAt,
+                    qrCount: historyItem.qrCount,
+                    fileSize: historyItem.fileSize,
+                    historyId: historyItem.id,
+                    isHistory: true
+                });
+            });
+        }
+    }
+    
+    res.json({
+        currentPdfs: allPdfs,
+        historyPdfs: historyPdfs,
+        totalCount: allPdfs.length + historyPdfs.length
+    });
+});
+
+// Public PDF download endpoint (no authentication required)
+app.get('/api/public-download-pdf/:deviceId', (req, res) => {
+    const deviceId = req.params.deviceId;
+    console.log(`📥 Public PDF download request for device: ${deviceId}`);
+    
+    const userConfig = userConfigurations.get(deviceId);
+    
+    if (!userConfig || !userConfig.qrPdf) {
+        return res.status(404).json({ error: 'PDF not found for this device' });
+    }
+    
+    const pdfPath = userConfig.qrPdf.filePath;
+    
+    if (fs.existsSync(pdfPath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${userConfig.qrPdf.filename}"`);
+        res.sendFile(path_module.resolve(pdfPath));
+        console.log(`✅ PDF served: ${userConfig.qrPdf.filename}`);
+    } else {
+        res.status(404).json({ error: 'PDF file not found on server' });
     }
 });
 
