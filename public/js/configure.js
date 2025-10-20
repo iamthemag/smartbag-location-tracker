@@ -22,6 +22,11 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeSocketConnection();
     setupEventListeners();
     logActivity('PDF Configuration system initialized', 'info');
+    
+    // Load existing PDFs after a short delay to ensure connection is established
+    setTimeout(() => {
+        loadExistingPdfs();
+    }, 2000);
 });
 
 // Check if user is authenticated
@@ -79,18 +84,25 @@ function initializeSocketConnection() {
     
     // Handle PDF uploads from Raspberry Pi devices (via Socket.IO)
     socket.on('qrPdfReceived', (data) => {
+        console.log('qrPdfReceived event received:', data);
         logActivity(`PDF received via Socket.IO: ${data.pdfInfo.filename} with ${data.pdfInfo.totalQRs} QR codes`, 'success');
         addPdfToList(data.pdfInfo, data.qrCodes);
     });
     
     // Handle PDF uploads (HTTP API broadcast)
     socket.on('pdfReceived', (data) => {
+        console.log('pdfReceived event received:', data);
         logActivity(`PDF received via HTTP API: ${data.filename}`, 'success');
         addPdfToList({
             filename: data.filename,
             totalQRs: data.qrCodes ? data.qrCodes.length : 0,
             uploadedAt: data.uploadedAt
         }, data.qrCodes || []);
+    });
+    
+    // Debug: Listen for all events
+    socket.onAny((eventName, ...args) => {
+        console.log(`Socket event received: ${eventName}`, args);
     });
     
     // Handle individual QR code uploads (fallback)
@@ -116,9 +128,13 @@ function initializeSocketConnection() {
     // Handle configuration data (existing PDFs)
     socket.on('configurationData', (data) => {
         logActivity('Loading existing configuration data', 'info');
-        if (data.qrCodes && data.qrCodes.length > 0) {
-            loadExistingPdfs();
-        }
+        loadExistingPdfs();
+    });
+    
+    // Handle authentication required
+    socket.on('authRequired', () => {
+        logActivity('Authentication required - redirecting to login', 'warning');
+        window.location.href = '/';
     });
 }
 
@@ -351,10 +367,13 @@ function downloadCurrentPdf() {
 
 // Load existing PDFs and history
 async function loadExistingPdfs() {
+    console.log('Loading existing PDFs...');
     try {
         // Load current configuration
         const configResponse = await fetch('/api/user-config');
+        console.log('Config response status:', configResponse.status);
         const config = await configResponse.json();
+        console.log('Config data:', config);
         
         if (config.qrPdf) {
             logActivity(`Found current PDF: ${config.qrPdf.filename}`, 'info');
@@ -378,9 +397,12 @@ async function loadExistingPdfs() {
         }
         
         // Load PDF history
+        console.log('Loading PDF history...');
         const historyResponse = await fetch('/api/pdf-history');
+        console.log('History response status:', historyResponse.status);
         if (historyResponse.ok) {
             const historyData = await historyResponse.json();
+            console.log('History data:', historyData);
             
             if (historyData.history && historyData.history.length > 0) {
                 logActivity(`Found ${historyData.history.length} PDFs in history`, 'info');

@@ -210,6 +210,18 @@ app.get('/debug/session', (req, res) => {
     });
 });
 
+// Debug route for server state
+app.get('/debug/server-state', (req, res) => {
+    const deviceId = req.session?.deviceId || 'unknown';
+    res.json({
+        userConfigurations: Array.from(userConfigurations.entries()),
+        pdfHistory: Array.from(pdfHistory.entries()),
+        connectedDevices: Array.from(connectedDevices.keys()),
+        sessionDeviceId: deviceId,
+        authenticated: req.session?.authenticated || false
+    });
+});
+
 // Login endpoint
 app.post('/api/login', async (req, res) => {
     const { deviceId, password } = req.body;
