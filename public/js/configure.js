@@ -131,6 +131,51 @@ function initializeSocketConnection() {
         loadExistingPdfs();
     });
     
+    // Handle PDF deletion events
+    socket.on('pdfDeleted', (data) => {
+        console.log('pdfDeleted event received:', data);
+        logActivity(`PDF was deleted: ${data.filename}`, 'warning');
+        
+        // Find and remove the PDF from UI
+        const pdfItems = document.querySelectorAll('.pdf-item');
+        pdfItems.forEach(item => {
+            const pdfId = item.getAttribute('data-pdf-id');
+            const pdfData = receivedPdfs.get(pdfId);
+            if (pdfData && pdfData.pdfInfo.filename === data.filename && !pdfData.pdfInfo.isHistory) {
+                item.remove();
+                receivedPdfs.delete(pdfId);
+            }
+        });
+        
+        // Show placeholder if no PDFs left
+        if (pdfList.children.length === 0) {
+            pdfList.style.display = 'none';
+            pdfStatus.style.display = 'block';
+        }
+    });
+    
+    socket.on('pdfHistoryDeleted', (data) => {
+        console.log('pdfHistoryDeleted event received:', data);
+        logActivity(`Historical PDF was deleted: ${data.filename}`, 'warning');
+        
+        // Find and remove the historical PDF from UI
+        const pdfItems = document.querySelectorAll('.pdf-item');
+        pdfItems.forEach(item => {
+            const pdfId = item.getAttribute('data-pdf-id');
+            const pdfData = receivedPdfs.get(pdfId);
+            if (pdfData && pdfData.pdfInfo.historyId === data.historyId) {
+                item.remove();
+                receivedPdfs.delete(pdfId);
+            }
+        });
+        
+        // Show placeholder if no PDFs left
+        if (pdfList.children.length === 0) {
+            pdfList.style.display = 'none';
+            pdfStatus.style.display = 'block';
+        }
+    });
+    
     // Handle authentication required
     socket.on('authRequired', () => {
         logActivity('Authentication required - redirecting to login', 'warning');
@@ -270,6 +315,9 @@ function addPdfToList(pdfInfo, qrCodes) {
                 <button class="btn btn-pdf btn-download" onclick="downloadPdf('${pdfId}')">
                     <i class="fas fa-download"></i> Download
                 </button>
+                <button class="btn btn-pdf btn-delete" onclick="deletePdf('${pdfId}')" title="Delete PDF">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
             </div>
         </div>
     `;
@@ -373,6 +421,57 @@ function downloadCurrentPdf() {
         $('#pdfPreviewModal').modal('hide');
     }
 }
+
+// Delete PDF
+async function deletePdf(pdfId) {
+    const pdfData = receivedPdfs.get(pdfId);
+    if (!pdfData) {
+        logActivity('PDF not found for deletion', 'error');
+        return;
+    }
+
+    const isHistory = !!pdfData.pdfInfo.isHistory;
+
+    if (!confirm(`Are you sure you want to delete ${isHistory ? 'this historical PDF' : 'the current PDF'}: ${pdfData.pdfInfo.filename}? This cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        let url;
+        if (isHistory && pdfData.pdfInfo.historyId) {
+            url = `/api/delete-pdf-history/${pdfData.pdfInfo.historyId}`;
+        } else {
+            url = '/api/delete-current-pdf';
+        }
+
+        const response = await fetch(url, { method: 'DELETE' });
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+            logActivity(`PDF deleted: ${result.filename}`, 'success');
+
+            // Remove from UI
+            const item = document.querySelector(`.pdf-item[data-pdf-id="${pdfId}"]`);
+            if (item) item.remove();
+
+            // Show placeholder if no PDFs left
+            if (pdfList.children.length === 0) {
+                pdfList.style.display = 'none';
+                pdfStatus.style.display = 'block';
+            }
+
+            receivedPdfs.delete(pdfId);
+        } else {
+            throw new Error(result.error || 'Deletion failed');
+        }
+    } catch (error) {
+        console.error('PDF deletion error:', error);
+        logActivity(`Failed to delete PDF: ${error.message}`, 'error');
+    }
+}
+
+// Expose deletePdf globally
+window.deletePdf = deletePdf;
 
 // Load existing PDFs and history
 async function loadExistingPdfs() {

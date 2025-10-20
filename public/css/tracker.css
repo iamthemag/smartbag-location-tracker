@@ -197,6 +197,17 @@
     transform: translateY(-2px);
 }
 
+.btn-delete {
+    background: #dc3545;
+    color: white;
+}
+
+.btn-delete:hover {
+    background: #c82333;
+    transform: translateY(-2px);
+    color: white;
+}
+
 /* Device list styles */
 .device-item {
     display: flex;

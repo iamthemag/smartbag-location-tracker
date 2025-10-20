@@ -827,6 +827,103 @@ app.get('/api/download-pdf-history/:historyId', (req, res) => {
     }
 });
 
+// API endpoint to delete current PDF
+app.delete('/api/delete-current-pdf', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const userConfig = userConfigurations.get(deviceId);
+    
+    if (!userConfig || !userConfig.qrPdf) {
+        return res.status(404).json({ error: 'No current PDF found to delete' });
+    }
+    
+    try {
+        // Delete PDF file from filesystem
+        const pdfPath = userConfig.qrPdf.filePath;
+        if (fs.existsSync(pdfPath)) {
+            fs.unlinkSync(pdfPath);
+            console.log(`🗑️ Deleted current PDF file: ${pdfPath}`);
+        }
+        
+        // Remove from user configuration
+        const deletedFilename = userConfig.qrPdf.filename;
+        userConfig.qrPdf = null;
+        userConfig.qrCodes = []; // Also clear QR codes
+        
+        console.log(`📄 Removed current PDF from config for device: ${deviceId}`);
+        
+        // Broadcast update to web clients
+        broadcastToWebClients(deviceId, 'pdfDeleted', {
+            filename: deletedFilename,
+            deletedAt: new Date().toISOString()
+        });
+        
+        res.json({ 
+            success: true, 
+            message: 'Current PDF deleted successfully',
+            filename: deletedFilename
+        });
+        
+    } catch (error) {
+        console.error('PDF deletion error:', error);
+        res.status(500).json({ error: 'Failed to delete PDF: ' + error.message });
+    }
+});
+
+// API endpoint to delete PDF from history
+app.delete('/api/delete-pdf-history/:historyId', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const historyId = req.params.historyId;
+    const history = pdfHistory.get(deviceId) || [];
+    
+    const pdfIndex = history.findIndex(entry => entry.id === historyId);
+    
+    if (pdfIndex === -1) {
+        return res.status(404).json({ error: 'PDF not found in history' });
+    }
+    
+    try {
+        const pdfEntry = history[pdfIndex];
+        
+        // Delete PDF file from filesystem
+        if (fs.existsSync(pdfEntry.filePath)) {
+            fs.unlinkSync(pdfEntry.filePath);
+            console.log(`🗑️ Deleted historical PDF file: ${pdfEntry.filePath}`);
+        }
+        
+        // Remove from history
+        history.splice(pdfIndex, 1);
+        const deletedFilename = pdfEntry.filename;
+        
+        console.log(`📚 Removed PDF from history for device ${deviceId}: ${deletedFilename}`);
+        
+        // Broadcast update to web clients
+        broadcastToWebClients(deviceId, 'pdfHistoryDeleted', {
+            filename: deletedFilename,
+            historyId: historyId,
+            deletedAt: new Date().toISOString()
+        });
+        
+        res.json({ 
+            success: true, 
+            message: 'Historical PDF deleted successfully',
+            filename: deletedFilename,
+            historyId: historyId
+        });
+        
+    } catch (error) {
+        console.error('PDF history deletion error:', error);
+        res.status(500).json({ error: 'Failed to delete historical PDF: ' + error.message });
+    }
+});
+
 // API endpoint to get authorized devices (for debugging)
 app.get('/api/devices', (req, res) => {
     res.json({
