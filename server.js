@@ -6,7 +6,6 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
-const { Client } = require('ssh2');
 const multer = require('multer');
 const fs = require('fs');
 const sharp = require('sharp');
@@ -253,161 +252,6 @@ const upload = multer({
     }
 });
 
-// SSH connection testing endpoint
-app.post('/api/ssh/test', (req, res) => {
-    const { hostname, username, password } = req.body;
-    
-    if (!hostname || !username || !password) {
-        return res.status(400).json({ error: 'All fields are required' });
-    }
-    
-    console.log(`Attempting SSH connection to: ${hostname} with user: ${username}`);
-    
-    const conn = new Client();
-    
-    // Set a timeout for the entire operation
-    const connectionTimeout = setTimeout(() => {
-        conn.destroy();
-        res.status(500).json({ 
-            error: 'Connection timeout. Please check if the hostname is correct and the Pi is accessible from this server.',
-            suggestions: [
-                'Try using the IP address instead of hostname',
-                'Ensure SSH is enabled on your Raspberry Pi',
-                'Check if the Pi is on the same network as this server',
-                'Verify firewall settings'
-            ]
-        });
-    }, 15000);
-    
-    conn.on('ready', () => {
-        clearTimeout(connectionTimeout);
-        console.log(`✅ SSH connection ready to ${hostname}`);
-        conn.end();
-        res.json({ 
-            success: true, 
-            message: 'SSH connection successful',
-            connectedTo: hostname
-        });
-    }).on('error', (err) => {
-        clearTimeout(connectionTimeout);
-        console.error('❌ SSH connection error:', err);
-        
-        let errorMessage = 'SSH connection failed: ' + err.message;
-        let suggestions = [];
-        
-        // Provide specific suggestions based on error type
-        if (err.code === 'ENOTFOUND') {
-            errorMessage = `Cannot resolve hostname '${hostname}'. The server cannot find this address.`;
-            suggestions = [
-                'Try using the IP address instead (e.g., 192.168.1.100)',
-                'Check if the hostname is correct',
-                'Ensure the Pi is on the same network',
-                'Try using fully qualified domain name if available'
-            ];
-        } else if (err.code === 'ECONNREFUSED') {
-            errorMessage = `Connection refused to ${hostname}:22. SSH service may not be running.`;
-            suggestions = [
-                'Enable SSH on your Raspberry Pi: sudo systemctl enable ssh',
-                'Start SSH service: sudo systemctl start ssh',
-                'Check if port 22 is open',
-                'Verify SSH is listening: sudo netstat -tlnp | grep :22'
-            ];
-        } else if (err.code === 'ETIMEDOUT') {
-            errorMessage = `Connection timed out to ${hostname}. Network or firewall issue.`;
-            suggestions = [
-                'Check network connectivity',
-                'Verify firewall settings',
-                'Ensure the Pi is powered on and connected',
-                'Try connecting from a device on the same network first'
-            ];
-        }
-        
-        res.status(500).json({ 
-            error: errorMessage,
-            suggestions: suggestions,
-            hostname: hostname,
-            errorCode: err.code
-        });
-    }).connect({
-        host: hostname,
-        username: username,
-        password: password,
-        timeout: 12000,
-        readyTimeout: 12000,
-        keepaliveInterval: 1000
-    });
-});
-
-// Photo upload endpoint
-app.post('/api/ssh/upload-photo', upload.single('photo'), (req, res) => {
-    const { hostname, username, password, itemName, day } = req.body;
-    const file = req.file;
-    
-    if (!hostname || !username || !password || !itemName || !day || !file) {
-        return res.status(400).json({ error: 'All fields and photo are required' });
-    }
-    
-    const conn = new Client();
-    
-    conn.on('ready', () => {
-        console.log(`SSH connection ready for photo upload to ${hostname}`);
-        
-        // Create the items directory if it doesn't exist
-        conn.exec('mkdir -p ~/Desktop/items', (err, stream) => {
-            if (err) {
-                conn.end();
-                return res.status(500).json({ error: 'Failed to create directory: ' + err.message });
-            }
-            
-            stream.on('close', () => {
-                // Upload the file
-                const remotePath = `~/Desktop/items/${day}_${itemName}_${Date.now()}.jpg`;
-                
-                conn.sftp((err, sftp) => {
-                    if (err) {
-                        conn.end();
-                        return res.status(500).json({ error: 'SFTP error: ' + err.message });
-                    }
-                    
-                    const readStream = fs.createReadStream(file.path);
-                    const writeStream = sftp.createWriteStream(remotePath);
-                    
-                    writeStream.on('close', () => {
-                        console.log(`Photo uploaded successfully: ${remotePath}`);
-                        // Clean up local file
-                        fs.unlinkSync(file.path);
-                        conn.end();
-                        res.json({ 
-                            success: true, 
-                            message: 'Photo uploaded successfully',
-                            remotePath: remotePath
-                        });
-                    }).on('error', (err) => {
-                        fs.unlinkSync(file.path);
-                        conn.end();
-                        res.status(500).json({ error: 'Upload failed: ' + err.message });
-                    });
-                    
-                    readStream.pipe(writeStream);
-                });
-            }).on('error', (err) => {
-                conn.end();
-                res.status(500).json({ error: 'Directory creation failed: ' + err.message });
-            });
-        });
-    }).on('error', (err) => {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
-        console.error('SSH connection error:', err.message);
-        res.status(500).json({ error: 'SSH connection failed: ' + err.message });
-    }).connect({
-        host: hostname,
-        username: username,
-        password: password,
-        timeout: 10000
-    });
-});
 
 // Photo upload endpoint for web clients
 app.post('/api/upload-photo/:qrFilename', upload.single('photo'), async (req, res) => {
@@ -547,7 +391,11 @@ app.get('/api/user-config', (req, res) => {
             uploadedAt: img.uploadedAt,
             size: img.size
         })),
-        completed: userConfig.completed
+        completed: userConfig.completed,
+        qrPdf: userConfig.qrPdf ? {
+            filename: userConfig.qrPdf.filename,
+            uploadedAt: userConfig.qrPdf.uploadedAt
+        } : null
     };
     
     res.json(sanitizedConfig);
@@ -610,6 +458,30 @@ app.get('/api/download-zip', (req, res) => {
     });
 });
 
+// QR PDF download endpoint
+app.get('/api/download-qr-pdf', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const userConfig = userConfigurations.get(deviceId);
+    
+    if (!userConfig || !userConfig.qrPdf) {
+        return res.status(404).json({ error: 'QR PDF not found' });
+    }
+    
+    const pdfPath = userConfig.qrPdf.filePath;
+    
+    if (fs.existsSync(pdfPath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${userConfig.qrPdf.filename}"`);
+        res.sendFile(path_module.resolve(pdfPath));
+    } else {
+        res.status(404).json({ error: 'QR PDF file not found on server' });
+    }
+});
+
 // Static file middleware AFTER specific routes
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -650,6 +522,90 @@ app.post('/api/location', (req, res) => {
             ? `wss://${process.env.RENDER_EXTERNAL_HOSTNAME}` 
             : `ws://localhost:${PORT}`
     });
+});
+
+// API endpoint for PDF upload from devices
+app.post('/api/pdf', (req, res) => {
+    const { filename, pdfData, qrList, deviceId } = req.body;
+    
+    if (!filename || !pdfData) {
+        return res.status(400).json({ error: 'Filename and PDF data are required' });
+    }
+    
+    if (!deviceId) {
+        return res.status(400).json({ error: 'Device ID is required' });
+    }
+    
+    // Check if device is authorized
+    if (!AUTHORIZED_DEVICES.includes(deviceId)) {
+        console.log(`Unauthorized device attempted PDF upload: ${deviceId}`);
+        return res.status(403).json({ error: 'Unauthorized device' });
+    }
+
+    try {
+        console.log(`📄 PDF upload via HTTP from ${deviceId}: ${filename}`);
+        
+        // Initialize user configuration if not exists
+        if (!userConfigurations.has(deviceId)) {
+            userConfigurations.set(deviceId, {
+                qrCodes: [],
+                itemImages: [],
+                completed: false,
+                qrPdf: null
+            });
+        }
+        
+        const userConfig = userConfigurations.get(deviceId);
+        
+        // Save PDF to filesystem
+        const pdfPath = path_module.join('qr-codes', deviceId);
+        if (!fs.existsSync(pdfPath)) {
+            fs.mkdirSync(pdfPath, { recursive: true });
+        }
+        
+        const pdfFilePath = path_module.join(pdfPath, filename);
+        const pdfBuffer = Buffer.from(pdfData, 'base64');
+        fs.writeFileSync(pdfFilePath, pdfBuffer);
+        
+        // Store PDF info
+        userConfig.qrPdf = {
+            filename: filename,
+            filePath: pdfFilePath,
+            uploadedAt: new Date().toISOString()
+        };
+        
+        // Process QR code list if provided
+        if (qrList && Array.isArray(qrList)) {
+            userConfig.qrCodes = qrList.map(qrInfo => ({
+                filename: qrInfo.filename,
+                label: qrInfo.label || extractLabelFromFilename(qrInfo.filename),
+                uploadedAt: new Date().toISOString(),
+                hasPhoto: false,
+                imageData: qrInfo.imageData
+            }));
+        }
+        
+        // Broadcast to web clients
+        broadcastToWebClients(deviceId, 'pdfReceived', {
+            filename: filename,
+            qrCodes: userConfig.qrCodes,
+            uploadedAt: new Date().toISOString()
+        });
+        
+        res.json({
+            success: true,
+            message: 'PDF received via HTTP. Socket.IO provides real-time updates.',
+            filename: filename,
+            processedQRs: userConfig.qrCodes.length,
+            socketUrl: process.env.NODE_ENV === 'production' 
+                ? `wss://${process.env.RENDER_EXTERNAL_HOSTNAME}` 
+                : `ws://localhost:${PORT}`
+        });
+        
+    } catch (error) {
+        console.error('PDF upload error:', error);
+        res.status(500).json({ error: 'PDF upload failed: ' + error.message });
+    }
 });
 
 // API endpoint to get current location
@@ -752,17 +708,82 @@ io.on('connection', (socket) => {
                 }
             });
             
-            // Handle QR code upload from Pi
-            socket.on('qrUpload', (data) => {
+            // Handle QR PDF upload from Pi
+            socket.on('qrPdfUpload', (data) => {
                 if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
-                    console.log(`📟 QR upload from ${socket.deviceId}:`, data.filename);
+                    console.log(`📄 QR PDF upload from ${socket.deviceId}:`, data.filename, 'with', data.qrList.length, 'QR codes');
                     
                     // Initialize user configuration if not exists
                     if (!userConfigurations.has(socket.deviceId)) {
                         userConfigurations.set(socket.deviceId, {
                             qrCodes: [],
                             itemImages: [],
-                            completed: false
+                            completed: false,
+                            qrPdf: null
+                        });
+                    }
+                    
+                    const userConfig = userConfigurations.get(socket.deviceId);
+                    
+                    // Save PDF to filesystem
+                    const pdfPath = path_module.join('qr-codes', socket.deviceId);
+                    if (!fs.existsSync(pdfPath)) {
+                        fs.mkdirSync(pdfPath, { recursive: true });
+                    }
+                    
+                    const pdfFilePath = path_module.join(pdfPath, data.filename);
+                    const pdfBuffer = Buffer.from(data.pdfData, 'base64');
+                    fs.writeFileSync(pdfFilePath, pdfBuffer);
+                    
+                    // Store PDF info
+                    userConfig.qrPdf = {
+                        filename: data.filename,
+                        filePath: pdfFilePath,
+                        uploadedAt: new Date().toISOString()
+                    };
+                    
+                    // Process QR code list and create individual QR entries
+                    userConfig.qrCodes = data.qrList.map(qrInfo => ({
+                        filename: qrInfo.filename, // e.g., "Monday_Keys.png"
+                        label: qrInfo.label || extractLabelFromFilename(qrInfo.filename),
+                        uploadedAt: new Date().toISOString(),
+                        hasPhoto: false,
+                        imageData: qrInfo.imageData // base64 QR image for display
+                    }));
+                    
+                    console.log(`✅ Processed ${userConfig.qrCodes.length} QR codes from PDF`);
+                    
+                    // Broadcast to web clients
+                    broadcastToWebClients(socket.deviceId, 'qrPdfReceived', {
+                        qrCodes: userConfig.qrCodes,
+                        pdfInfo: {
+                            filename: data.filename,
+                            totalQRs: data.qrList.length
+                        }
+                    });
+                    
+                    socket.emit('qrPdfUploadAck', { 
+                        success: true, 
+                        filename: data.filename,
+                        processedQRs: userConfig.qrCodes.length
+                    });
+                } else {
+                    socket.emit('qrPdfUploadError', { error: 'Unauthorized QR PDF upload' });
+                }
+            });
+            
+            // Handle individual QR code upload (fallback for backward compatibility)
+            socket.on('qrUpload', (data) => {
+                if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
+                    console.log(`📟 Individual QR upload from ${socket.deviceId}:`, data.filename);
+                    
+                    // Initialize user configuration if not exists
+                    if (!userConfigurations.has(socket.deviceId)) {
+                        userConfigurations.set(socket.deviceId, {
+                            qrCodes: [],
+                            itemImages: [],
+                            completed: false,
+                            qrPdf: null
                         });
                     }
                     
@@ -777,17 +798,6 @@ io.on('connection', (socket) => {
                         hasPhoto: false
                     };
                     
-                    // Save QR code to filesystem
-                    const qrPath = path_module.join('qr-codes', socket.deviceId);
-                    if (!fs.existsSync(qrPath)) {
-                        fs.mkdirSync(qrPath, { recursive: true });
-                    }
-                    
-                    const qrFilePath = path_module.join(qrPath, data.filename);
-                    const buffer = Buffer.from(data.imageData, 'base64');
-                    fs.writeFileSync(qrFilePath, buffer);
-                    
-                    qrData.filePath = qrFilePath;
                     userConfig.qrCodes.push(qrData);
                     
                     // Broadcast to web clients for this device

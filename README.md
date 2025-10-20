@@ -1,29 +1,44 @@
-# 🗺️ Location Tracker App
+# 🎒 SmartBag Location Tracker & Configuration System
 
-A real-time web application that receives location data from a Raspberry Pi and displays it on an interactive map using WebSocket connections.
+A comprehensive IoT application that combines real-time GPS location tracking with intelligent item management using QR codes. This system enables you to track both the location of your smart bag and manage the items inside it through an intuitive web interface.
 
 ## ✨ Features
 
-- **Real-time Location Tracking**: Displays location updates instantly as they're received
+### 📍 Location Tracking
+- **Real-time GPS Tracking**: Live location updates from Raspberry Pi devices
 - **Interactive Map**: Built with Leaflet.js for smooth map interactions
-- **Location History**: View and toggle historical location points with path visualization
-- **WebSocket Communication**: Uses Socket.IO for real-time bidirectional communication
+- **Location History**: View historical location points with path visualization
+- **Multi-device Support**: Track multiple devices simultaneously
+- **Turn-by-turn Directions**: Get directions to your bag's location
+
+### 📦 Smart Item Management
+- **QR Code Generation**: Generate weekly QR codes for bag items
+- **Photo Upload**: Associate photos with QR-coded items
+- **Device Authentication**: Secure login system for device management
+- **Configuration Sync**: Seamless data sync between Pi and web interface
+- **Batch Operations**: Download configurations as ZIP files
+
+### 🔧 Technical Features
+- **WebSocket Communication**: Real-time bidirectional communication with Socket.IO
 - **Responsive Design**: Works on desktop, tablet, and mobile devices
-- **Connection Status**: Visual indicator showing server connection status
-- **Location Accuracy**: Displays GPS accuracy circles when available
+- **Connection Status**: Visual indicators for device connection status
+- **Session Management**: Secure authentication with session handling
+- **File Compression**: Automatic image compression for efficient transfer
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js (v14 or higher)
-- npm (Node Package Manager)
-- Raspberry Pi with GPS module (for location data source)
+- **Node.js** (v14 or higher)
+- **npm** (Node Package Manager)
+- **Raspberry Pi** with GPS module (for location tracking)
+- **Python 3.7+** (for Raspberry Pi client scripts)
 
-### Installation
+### Server Setup
 
 1. **Clone or download this project**
    ```bash
+   git clone <repository-url>
    cd location-tracker-app
    ```
 
@@ -37,17 +52,14 @@ A real-time web application that receives location data from a Raspberry Pi and 
    cp .env.example .env
    ```
    
-   Edit `.env` file and add your Google Maps API key:
+   Edit `.env` file and configure:
    ```env
-   GOOGLE_MAPS_API_KEY=your_actual_google_maps_api_key_here
+   PORT=3000
+   SESSION_SECRET=your-secret-key-here
+   MAX_HISTORY=100
+   AUTHORIZED_DEVICES=raspi-001,raspi-002,smartbag-device-01
+   NODE_ENV=development
    ```
-   
-   **Getting a Google Maps API Key:**
-   - Go to [Google Cloud Console](https://console.cloud.google.com/google/maps-apis/)
-   - Create a new project or select existing one
-   - Enable "Maps JavaScript API"
-   - Create credentials (API Key)
-   - Copy the API key to your `.env` file
 
 4. **Start the server**
    ```bash
@@ -59,38 +71,105 @@ A real-time web application that receives location data from a Raspberry Pi and 
    npm run dev
    ```
 
-5. **Open your web browser**
-   Navigate to: `http://localhost:3000`
+5. **Access the application**
+   - Navigate to: `http://localhost:3000`
+   - Default login credentials:
+     - Device ID: `raspi-001` (or any from AUTHORIZED_DEVICES)
+     - Password: `Bag@123`
+
+### Raspberry Pi Setup
+
+1. **Install Python dependencies**
+   ```bash
+   pip install python-socketio requests pyserial pynmea2 qrcode pandas reportlab pillow
+   ```
+
+2. **Configure GPS connection**
+   - Connect your GPS module to the Raspberry Pi
+   - Update the `GPS_PORT` variable in `raspberry-pi-client.py`
+   - Common ports: `/dev/ttyUSB0`, `/dev/ttyAMA0`, `/dev/serial0`
+
+3. **Update client configuration**
+   Edit `locationtomap.py` or `raspberry-pi-client.py`:
+   ```python
+   SERVER_URL = "https://location-tracker-app-waa4.onrender.com"
+   DEVICE_ID = "raspi-001"  # Must match authorized device
+   ```
+
+4. **Run the GPS client**
+   ```bash
+   python3 raspberry-pi-client.py
+   ```
+
+## 📦 SmartBag QR Code Generation
+
+The system includes a powerful QR code generator for organizing weekly items:
+
+### Generate QR Codes for Weekly Items
+
+1. **Run the QR generator**
+   ```bash
+   python3 smart_bag_generator.py
+   ```
+
+2. **Enter items for each day**
+   - The script will prompt you for items for each day of the week
+   - Type `0` to move to the next day
+   - Empty days are allowed
+
+3. **Generated files**
+   - `smart_bag.csv`: List of all items
+   - `smart_bag_qr/`: Folder containing individual QR code images
+   - `smart_bag_qr.pdf`: Printable PDF with all QR codes
+
+4. **Upload to server** (optional)
+   - The generator can automatically upload the QR data to your server
+   - Configure `SERVER_URL` and `DEVICE_ID` in the script
+   - Data is transmitted via Socket.IO for real-time sync
+
+### Using QR Codes
+
+1. **Print the PDF**: Print `smart_bag_qr.pdf` and attach QR codes to items
+2. **Web interface**: Use `/configure` page to:
+   - View uploaded QR codes
+   - Upload photos for each QR-coded item
+   - Download configuration as ZIP file
+3. **Automatic sync**: Photos are automatically sent to the Pi device
 
 ## 📡 API Endpoints
 
-### POST /api/location
-Submit location data from your Raspberry Pi or any device.
+### Authentication
+
+#### POST /api/login
+Authenticate with device credentials.
+
+**Request Body:**
+```json
+{
+  "deviceId": "raspi-001",
+  "password": "Bag@123"
+}
+```
+
+#### GET /api/auth-status
+Check current authentication status.
+
+### Location Tracking
+
+#### POST /api/location
+Submit location data (HTTP fallback - prefer Socket.IO).
 
 **Request Body:**
 ```json
 {
   "latitude": 40.7128,
   "longitude": -74.0060,
-  "accuracy": 5.0
+  "accuracy": 5.0,
+  "deviceId": "raspi-001"
 }
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Location received",
-  "location": {
-    "latitude": 40.7128,
-    "longitude": -74.0060,
-    "accuracy": 5.0,
-    "timestamp": "2023-10-17T10:30:00.000Z"
-  }
-}
-```
-
-### GET /api/location
+#### GET /api/location
 Retrieve current location and history.
 
 **Response:**
@@ -100,18 +179,26 @@ Retrieve current location and history.
     "latitude": 40.7128,
     "longitude": -74.0060,
     "accuracy": 5.0,
-    "timestamp": "2023-10-17T10:30:00.000Z"
+    "timestamp": "2023-10-17T10:30:00.000Z",
+    "deviceId": "raspi-001"
   },
-  "history": [
-    {
-      "latitude": 40.7128,
-      "longitude": -74.0060,
-      "accuracy": 5.0,
-      "timestamp": "2023-10-17T10:30:00.000Z"
-    }
-  ]
+  "history": [...]
 }
 ```
+
+### Configuration Management
+
+#### GET /api/user-config
+Get QR codes and photos for authenticated device.
+
+#### POST /api/upload-photo/:qrFilename
+Upload photo for a specific QR code (with automatic compression).
+
+#### GET /api/download-zip
+Download complete configuration as ZIP file.
+
+#### GET /api/devices
+Get status of connected devices (debugging).
 
 ## 🥧 Raspberry Pi Setup
 

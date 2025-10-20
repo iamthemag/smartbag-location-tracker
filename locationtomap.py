@@ -18,19 +18,25 @@ import pynmea2
 import socketio
 import sys
 import json
+import os
 from datetime import datetime
 from collections import deque
+from urllib.parse import urlparse
+import requests
 
 # Configuration
-SERVER_URL = "http://YOUR_WINDOWS_IP:3000"  # Change to your actual Windows machine IP
+SERVER_URL = "https://location-tracker-app-waa4.onrender.com"  # Deployed app URL
 DEVICE_ID = "raspi-001"  # Change this to your unique device ID (must be in AUTHORIZED_DEVICES list)
-GPS_PORT = "/dev/ttyAMA0"  # GPS port from your template
+GPS_PORT = "/dev/ttyAMA0"  # GPS port - common options: /dev/ttyUSB0, /dev/ttyAMA0, /dev/serial0
 GPS_BAUDRATE = 9600
 UPDATE_INTERVAL = 5  # seconds between updates (set to 0 for continuous)
 SINGLE_FIX = False  # Set to True to stop after first valid fix
 LOCATION_CACHE_SIZE = 5  # Number of recent locations to keep (reduced buffer)
+DEMO_MODE = False  # Set to True to use simulated GPS data for testing
 
 # Global variables
+NO_FIX_RESTART_SECONDS = 180  # restart the script if no valid GPS fix within this many seconds
+RECONNECT_BACKOFFS = [2, 5, 10, 20, 30]  # seconds between reconnect attempts
 location_cache = deque(maxlen=LOCATION_CACHE_SIZE)  # Store recent locations
 authenticated = False
 gps_serial = None
@@ -44,6 +50,11 @@ sio = socketio.Client(
     reconnection_delay=2,
     reconnection_delay_max=30
 )
+
+# Always use Socket.IO for real-time updates
+USE_SOCKET = True
+# HTTP API endpoint for fallback
+HTTP_API_URL = SERVER_URL + "/api/location"
 
 def create_location_entry(lat, lng, accuracy=None):
     """Create a standardized location entry with timestamp"""
@@ -96,6 +107,32 @@ def send_cached_location():
         return True
     return False
 
+def http_post_location(lat, lng, accuracy=None):
+    """Fallback: send location via HTTP POST to /api/location when Socket.IO is unavailable."""
+    try:
+        payload = {
+            'latitude': lat,
+            'longitude': lng,
+            'deviceId': DEVICE_ID,
+            'timestamp': datetime.now().isoformat()
+        }
+        if accuracy is not None:
+            payload['accuracy'] = accuracy
+        resp = requests.post(HTTP_API_URL, json=payload, timeout=8)
+        ok = 200 <= resp.status_code < 300
+        ts = datetime.now().strftime("%H:%M:%S")
+        if ok:
+            print(f"[{ts}] 📮 HTTP POST sent ok (status {resp.status_code})")
+            return True
+        else:
+            print(f"[{ts}] ❌ HTTP POST failed (status {resp.status_code}): {resp.text[:120]}")
+            return False
+    except Exception as e:
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] ❌ HTTP POST error: {e}")
+        return False
+
+
 def send_location_to_server(lat, lng, accuracy=None, is_cached=False):
     """Send location data to server via Socket.IO (only if not already sending)"""
     global sending_location, last_send_time
@@ -119,7 +156,7 @@ def send_location_to_server(lat, lng, accuracy=None, is_cached=False):
         # Cache the location first
         location_entry = cache_location(lat, lng, accuracy)
     
-    if sio.connected and authenticated:
+    if USE_SOCKET and sio.connected and authenticated:
         sending_location = True  # Set flag to prevent multiple sends
         
         payload = {
@@ -142,9 +179,12 @@ def send_location_to_server(lat, lng, accuracy=None, is_cached=False):
         print(f"[{timestamp}] 🗺️ Maps: {link}")
         return True
     else:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] ⚠️ Not connected to server - location cached only")
-        return False
+        # Try HTTP fallback to REST endpoint
+        ok = http_post_location(lat, lng, accuracy)
+        if not ok:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(f"[{timestamp}] ⚠️ Not connected to socket - location cached only")
+        return ok
 
 # Socket.IO event handlers
 @sio.event
@@ -202,9 +242,33 @@ def on_location_error(data):
     sending_location = False  # Reset flag on error
     print(f"❌ Location update error: {data['error']}")
 
+def get_demo_location():
+    """Generate demo location data for testing"""
+    import random
+    
+    # Demo coordinates (New York City area with some variation)
+    base_coords = [
+        (40.7128, -74.0060),  # NYC
+        (40.7580, -73.9855),  # Times Square
+        (40.6892, -74.0445),  # Statue of Liberty
+        (40.7614, -73.9776),  # Central Park
+        (40.7505, -73.9934),  # Empire State Building
+    ]
+    
+    # Pick a random base and add small variation
+    base_lat, base_lng = random.choice(base_coords)
+    lat = base_lat + random.uniform(-0.001, 0.001)
+    lng = base_lng + random.uniform(-0.001, 0.001)
+    accuracy = random.uniform(3.0, 15.0)
+    
+    return lat, lng, accuracy
+
 def get_gps_reading():
-    """Get a single GPS reading from the serial port"""
+    """Get a single GPS reading from the serial port or demo data"""
     global gps_serial
+    
+    if DEMO_MODE:
+        return get_demo_location()
     
     if not gps_serial:
         return None, None, None
@@ -237,6 +301,49 @@ def get_gps_reading():
         
     return None, None, None
 
+def restart_self():
+    """Restart this script in-place to recover from stuck states"""
+    try:
+        print("🔁 Restarting location tracker process to recover...")
+        python = sys.executable or "/usr/bin/python3"
+        os.execv(python, [python, os.path.abspath(__file__)] + sys.argv[1:])
+    except Exception as e:
+        print(f"❌ Failed to restart self: {e}")
+        sys.exit(1)
+
+
+def _socketio_base(url: str) -> str:
+    """Return scheme://host:port for a given URL (strip any path like /api/...)."""
+    try:
+        p = urlparse(url)
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        pass
+    return url
+
+
+def ensure_connected():
+    """Ensure Socket.IO client is connected; retry in a loop on failure"""
+    if not USE_SOCKET:
+        # Socket disabled; skip
+        return
+    attempt = 0
+    while not sio.connected:
+        delay = RECONNECT_BACKOFFS[min(attempt, len(RECONNECT_BACKOFFS)-1)]
+        try:
+            print(f"🔗 Connecting to server... ({SERVER_URL})")
+            # Use polling transport for better compatibility
+            sio.connect(SERVER_URL)
+            if sio.connected:
+                print("✅ Socket connected")
+                return
+        except Exception as e:
+            print(f"⚠️ Connect failed: {e}. Retrying in {delay}s...")
+        time.sleep(delay)
+        attempt += 1
+
+
 def main():
     global gps_serial
     
@@ -245,24 +352,29 @@ def main():
     print("=" * 60)
     print(f"Device ID: {DEVICE_ID}")
     print(f"Server URL: {SERVER_URL}")
+    print(f"HTTP API: {HTTP_API_URL}")
     print(f"GPS Port: {GPS_PORT}")
+    print(f"Demo Mode: {DEMO_MODE}")
     print(f"Cache Size: {LOCATION_CACHE_SIZE} locations")
     print("-" * 60)
     
     try:
-        # Connect to server first
-        print("🔗 Connecting to server...")
-        sio.connect(SERVER_URL)
+        # Ensure server connection (with retries) if using socket mode
+        ensure_connected()
         
-        # Initialize GPS connection
-        print(f"🛰️ Connecting to GPS on {GPS_PORT}...")
-        gps_serial = serial.Serial(GPS_PORT, baudrate=GPS_BAUDRATE, timeout=1)
-        print("✅ GPS connection established")
-        print("⏳ Waiting for GPS fix... (may take a few minutes)")
+        # Initialize GPS connection (skip if in demo mode)
+        if not DEMO_MODE:
+            print(f"🛰️ Connecting to GPS on {GPS_PORT}...")
+            gps_serial = serial.Serial(GPS_PORT, baudrate=GPS_BAUDRATE, timeout=1)
+            print("✅ GPS connection established")
+            print("⏳ Waiting for GPS fix... (may take a few minutes)")
+        else:
+            print("🎭 Demo mode enabled - using simulated GPS data")
         
         consecutive_failures = 0
         max_failures = 10
         last_location_time = 0
+        last_any_read_time = time.time()  # time of last any NMEA line parsed (even if invalid)
         
         while True:
             try:
@@ -270,6 +382,8 @@ def main():
                 
                 # Get GPS reading
                 lat, lng, accuracy = get_gps_reading()
+                if lat is not None or lng is not None:
+                    last_any_read_time = current_time
                 
                 if lat and lng:
                     # Send to server and cache
@@ -287,6 +401,10 @@ def main():
                         # Still cache even if server send failed
                         consecutive_failures += 1
                         
+                # Ensure socket stays connected
+                if USE_SOCKET and not sio.connected:
+                    ensure_connected()
+
                 # Check for reconnection and immediate location update
                 if sio.connected and authenticated and (current_time - last_location_time) > 1:
                     # Try to get fresh GPS reading for immediate update after reconnection
@@ -299,11 +417,16 @@ def main():
                 print(f"❌ Error in main loop: {e}")
                 consecutive_failures += 1
                 
-            # Exit if too many consecutive failures
+            # Restart if too many consecutive failures
             if consecutive_failures >= max_failures:
-                print(f"❌ Too many consecutive failures ({consecutive_failures}). Check GPS connection.")
-                break
+                print(f"❌ Too many consecutive failures ({consecutive_failures}). Restarting...")
+                restart_self()
                 
+            # Restart if no valid GPS fix for too long
+            if not SINGLE_FIX and last_location_time and (time.time() - last_location_time) > NO_FIX_RESTART_SECONDS:
+                print(f"⏱️ No valid GPS fix for {int(time.time() - last_location_time)}s (threshold {NO_FIX_RESTART_SECONDS}s) - restarting...")
+                restart_self()
+
             # Wait before next reading (if not single fix mode)
             if not SINGLE_FIX and UPDATE_INTERVAL > 0:
                 time.sleep(UPDATE_INTERVAL)
@@ -326,8 +449,10 @@ def main():
             pass
         
         try:
-            sio.disconnect()
-            print("📱 Socket.IO connection closed")
+            # Avoid closing if we plan to restart; let execv replace the process
+            if USE_SOCKET and sio.connected:
+                sio.disconnect()
+                print("📱 Socket.IO connection closed")
         except:
             pass
             
@@ -352,16 +477,26 @@ def print_cache_status():
 if __name__ == "__main__":
     # Handle command line arguments
     if len(sys.argv) > 1:
-        SERVER_URL = sys.argv[1]
-        print(f"Using server URL: {SERVER_URL}")
+        if sys.argv[1].lower() == 'demo':
+            DEMO_MODE = True
+            print("Demo mode enabled via command line")
+        else:
+            SERVER_URL = sys.argv[1]
+            HTTP_API_URL = SERVER_URL + "/api/location"
+            print(f"Using server URL: {SERVER_URL}")
     
     if len(sys.argv) > 2:
         DEVICE_ID = sys.argv[2]
         print(f"Using device ID: {DEVICE_ID}")
         
     if len(sys.argv) > 3:
-        SINGLE_FIX = sys.argv[3].lower() in ['true', '1', 'yes', 'single']
-        print(f"Single fix mode: {SINGLE_FIX}")
+        arg3 = sys.argv[3].lower()
+        if arg3 in ['demo', 'test']:
+            DEMO_MODE = True
+            print("Demo mode enabled via command line")
+        elif arg3 in ['true', '1', 'yes', 'single']:
+            SINGLE_FIX = True
+            print(f"Single fix mode: {SINGLE_FIX}")
     
     if len(sys.argv) > 4:
         LOCATION_CACHE_SIZE = min(int(sys.argv[4]), 5)  # Maximum 5 locations
