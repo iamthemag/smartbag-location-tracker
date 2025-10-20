@@ -221,12 +221,15 @@ function clearDeviceList() {
 
 // Add PDF to the list
 function addPdfToList(pdfInfo, qrCodes) {
+    console.log('📁 addPdfToList called with:', pdfInfo, 'QR codes:', qrCodes ? qrCodes.length : 0);
+    
     const pdfId = `pdf_${Date.now()}`;
     receivedPdfs.set(pdfId, { pdfInfo, qrCodes });
     
+    console.log('📺 Showing PDF list, hiding status message');
     // Hide "no PDFs" message and show PDF list
-    pdfStatus.style.display = 'none';
-    pdfList.style.display = 'block';
+    if (pdfStatus) pdfStatus.style.display = 'none';
+    if (pdfList) pdfList.style.display = 'block';
     
     // Format file size
     const formatFileSize = (bytes) => {
@@ -271,7 +274,13 @@ function addPdfToList(pdfInfo, qrCodes) {
         </div>
     `;
     
-    pdfList.insertAdjacentHTML('afterbegin', pdfItemHtml);
+    console.log('📦 Inserting PDF HTML:', pdfItemHtml.substring(0, 100) + '...');
+    if (pdfList) {
+        pdfList.insertAdjacentHTML('afterbegin', pdfItemHtml);
+        console.log('✅ PDF HTML inserted successfully');
+    } else {
+        console.error('❌ pdfList element not found!');
+    }
 }
 
 // Preview PDF in modal
@@ -376,26 +385,31 @@ async function loadExistingPdfs() {
         console.log('Config data:', config);
         
         if (config.qrPdf) {
+            console.log('📄 Found PDF in config:', config.qrPdf);
+            console.log('📊 QR Codes available:', config.qrCodes ? config.qrCodes.length : 0);
             logActivity(`Found current PDF: ${config.qrPdf.filename}`, 'info');
             
             // Add current PDF to list
             const pdfId = `current_${Date.now()}`;
+            const pdfInfo = {
+                filename: config.qrPdf.filename,
+                totalQRs: config.qrCodes ? config.qrCodes.length : 0,
+                uploadedAt: config.qrPdf.uploadedAt,
+                isHistory: false
+            };
+            
+            console.log('📋 Calling addPdfToList with:', pdfInfo);
+            
             receivedPdfs.set(pdfId, {
-                pdfInfo: {
-                    filename: config.qrPdf.filename,
-                    totalQRs: config.qrCodes ? config.qrCodes.length : 0,
-                    uploadedAt: config.qrPdf.uploadedAt
-                },
+                pdfInfo: pdfInfo,
                 qrCodes: config.qrCodes || []
             });
             
-            addPdfToList({
-                filename: config.qrPdf.filename,
-                totalQRs: config.qrCodes ? config.qrCodes.length : 0,
-                uploadedAt: config.qrPdf.uploadedAt
-            }, config.qrCodes || []);
+            addPdfToList(pdfInfo, config.qrCodes || []);
+            
+            console.log('✅ Added current PDF to list:', config.qrPdf.filename);
         } else {
-            console.log('No qrPdf found in config');
+            console.log('❌ No qrPdf found in config');
             logActivity('No current PDF found', 'info');
         }
         
