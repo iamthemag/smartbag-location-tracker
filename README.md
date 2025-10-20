@@ -22,7 +22,8 @@ A comprehensive IoT application that combines real-time GPS location tracking wi
 - **Persistent Storage**: Up to 50 PDFs per device with automatic cleanup
 - **Rich Metadata**: Track filename, upload time, QR count, file size for each PDF
 - **Individual Downloads**: Download any PDF from complete history
-- **Real-Time Updates**: Instant notification when new PDFs are uploaded
+- **PDF Deletion**: Delete individual PDFs with confirmation dialogs
+- **Real-Time Updates**: Instant notification when new PDFs are uploaded or deleted
 - **Organized Storage**: Device-specific folders with timestamped files
 
 ### 🔧 Technical Excellence
@@ -204,7 +205,9 @@ python3 configure-bag-items.py --help
 - ✅ **Complete History** with up to 50 PDFs per device
 - ✅ **Smart Organization** with timestamps and metadata
 - ✅ **One-Click Downloads** for current or historical PDFs
-- ✅ **Real-time Notifications** when new PDFs arrive
+- ✅ **PDF Deletion** with confirmation dialogs and real-time UI updates
+- ✅ **Storage Management** - delete old PDFs to free up server space
+- ✅ **Real-time Notifications** when new PDFs arrive or are deleted
 
 ## 📡 API Endpoints
 
@@ -302,6 +305,31 @@ Download specific PDF from history by ID.
 
 #### GET /api/download-qr-pdf
 Download current/latest PDF for authenticated device.
+
+#### DELETE /api/delete-current-pdf
+Delete the current/latest PDF for authenticated device.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Current PDF deleted successfully",
+  "filename": "smart_bag_qr.pdf"
+}
+```
+
+#### DELETE /api/delete-pdf-history/:historyId
+Delete specific historical PDF by ID.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Historical PDF deleted successfully",
+  "filename": "smart_bag_qr.pdf",
+  "historyId": "pdf_1729450876543_abc123def"
+}
+```
 
 ### Configuration Management
 
@@ -499,8 +527,9 @@ The application provides three main web interfaces:
 - **History Browser**: Complete audit trail of all PDF uploads
 - **Visual Indicators**: Current vs Historical PDF badges
 - **File Information**: QR count, file size, upload timestamps
-- **One-Click Downloads**: Download current or historical PDFs
-- **Real-time Updates**: Instant notifications when new PDFs arrive
+- **PDF Management**: Preview, Download, and Delete buttons for each PDF
+- **Storage Control**: Delete old PDFs to manage server storage
+- **Real-time Updates**: Instant notifications when PDFs are uploaded or deleted
 
 ## 🧪 Testing & Verification
 
@@ -532,6 +561,14 @@ curl https://location-tracker-app-waa4.onrender.com/api/location
 curl -X POST https://location-tracker-app-waa4.onrender.com/api/pdf \
      -H "Content-Type: application/json" \
      -d '{"filename": "test.pdf", "pdfData": "base64-data", "qrList": [], "deviceId": "raspi-001"}'
+
+# Test PDF deletion (requires authentication)
+curl -X DELETE https://location-tracker-app-waa4.onrender.com/api/delete-current-pdf \
+     -H "Cookie: smartbag-session=your-session-cookie"
+
+# Test historical PDF deletion
+curl -X DELETE https://location-tracker-app-waa4.onrender.com/api/delete-pdf-history/pdf_123456_abc \
+     -H "Cookie: smartbag-session=your-session-cookie"
 ```
 
 ### Socket.IO Testing
@@ -555,6 +592,15 @@ socket.on('locationUpdate', (data) => {
 // Listen for PDF updates
 socket.on('qrPdfReceived', (data) => {
     console.log('PDF received:', data);
+});
+
+// Listen for PDF deletion events
+socket.on('pdfDeleted', (data) => {
+    console.log('Current PDF deleted:', data);
+});
+
+socket.on('pdfHistoryDeleted', (data) => {
+    console.log('Historical PDF deleted:', data);
 });
 ```
 
@@ -651,7 +697,15 @@ The app uses Render.com with automatic deployment:
 3. **PDFs not appearing**
    - Check if Raspberry Pi is connected and authenticated
    - Verify PDF was uploaded successfully
+   - Check browser console for JavaScript errors
+   - Refresh page to reload PDF list
    - Check activity log for error messages
+
+4. **PDF deletion failed**
+   - Ensure you're logged in with proper authentication
+   - Check if PDF still exists on server
+   - Verify network connectivity
+   - Check browser console for deletion errors
 
 ### 🚑 Server Issues
 
@@ -728,11 +782,12 @@ The **SmartBag Location Tracker & Configuration System** is a comprehensive IoT 
 - **Deployment**: Render.com with auto-deployment
 
 ### 🏆 **Key Achievements**
-- **Automatic PDF Management**: No manual intervention required
+- **Automatic PDF Management**: Upload, storage, and deletion without manual intervention
 - **Enhanced QR Quality**: Larger, clearer QR codes for better scanning
-- **Complete Audit Trail**: Full history of all PDF uploads
-- **Real-time Sync**: Instant updates between Pi and web interface
-- **Production Ready**: Deployed and accessible via HTTPS
+- **Complete Audit Trail**: Full history of all PDF uploads with deletion tracking
+- **Storage Control**: Users can delete old PDFs to manage server space
+- **Real-time Sync**: Instant updates for uploads and deletions between Pi and web
+- **Production Ready**: Deployed and accessible via HTTPS with robust error handling
 
 ### 🔗 **Quick Links**
 - **🌐 Live App**: [https://location-tracker-app-waa4.onrender.com](https://location-tracker-app-waa4.onrender.com)
