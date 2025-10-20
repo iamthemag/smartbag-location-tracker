@@ -195,8 +195,8 @@ app.get('/tracker', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/configure', (req, res) => {
-    console.log('Serving configure page (no auth required)');
+app.get('/configure', requireAuth, (req, res) => {
+    console.log('Serving configure page to authenticated user:', req.session.deviceId);
     res.sendFile(path.join(__dirname, 'public', 'configure.html'));
 });
 

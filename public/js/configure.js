@@ -29,24 +29,25 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 2000);
 });
 
-// Check if user is authenticated (optional for configure page)
+// Check if user is authenticated
 async function checkAuthenticationStatus() {
     try {
         const response = await fetch('/api/auth-status');
         const data = await response.json();
         
-        if (data.authenticated) {
-            currentDeviceId = data.deviceId;
-            updateDeviceStatus(data.deviceId, false);
-            logActivity(`Authenticated as device: ${data.deviceId}`, 'success');
-        } else {
-            // Not authenticated, but that's OK for configure page
-            logActivity('Not authenticated - showing public configure page', 'info');
+        if (!data.authenticated) {
+            window.location.href = '/';
+            return;
         }
+        
+        currentDeviceId = data.deviceId;
+        updateDeviceStatus(data.deviceId, false);
+        logActivity(`Authenticated as device: ${data.deviceId}`, 'success');
         
     } catch (error) {
         console.error('Auth check failed:', error);
-        logActivity('Authentication check failed - continuing anyway', 'warning');
+        logActivity('Authentication check failed', 'error');
+        window.location.href = '/';
     }
 }
 
@@ -244,10 +245,6 @@ function addPdfToList(pdfInfo, qrCodes) {
     const fileSizeDisplay = pdfInfo.fileSize ? 
         `• <i class="fas fa-file"></i> ${formatFileSize(pdfInfo.fileSize)}` : '';
     
-    // Device display
-    const deviceDisplay = pdfInfo.deviceId ? 
-        `<i class="fas fa-microchip"></i> ${pdfInfo.deviceId} • ` : '';
-    
     const pdfItemHtml = `
         <div class="pdf-item" data-pdf-id="${pdfId}">
             <div class="pdf-info">
@@ -256,7 +253,7 @@ function addPdfToList(pdfInfo, qrCodes) {
                 </div>
                 <div class="pdf-details">
                     <small>
-                        ${deviceDisplay}<i class="fas fa-qrcode"></i> ${pdfInfo.totalQRs} QR codes • 
+                        <i class="fas fa-qrcode"></i> ${pdfInfo.totalQRs} QR codes • 
                         <i class="fas fa-clock"></i> ${new Date(pdfInfo.uploadedAt || Date.now()).toLocaleString()}
                         ${fileSizeDisplay}
                         • <i class="fas fa-tag"></i> ${pdfInfo.isHistory ? 'Historical' : 'Current'}
@@ -340,11 +337,9 @@ function downloadPdf(pdfId) {
     
     logActivity(`Downloading PDF: ${pdfData.pdfInfo.filename}`, 'info');
     
-    // Determine download URL based on device ID
+    // Determine download URL based on whether it's historical or current
     let downloadUrl;
-    if (pdfData.pdfInfo.deviceId) {
-        downloadUrl = `/api/public-download-pdf/${pdfData.pdfInfo.deviceId}`;
-    } else if (pdfData.pdfInfo.isHistory && pdfData.pdfInfo.historyId) {
+    if (pdfData.pdfInfo.isHistory && pdfData.pdfInfo.historyId) {
         downloadUrl = `/api/download-pdf-history/${pdfData.pdfInfo.historyId}`;
     } else {
         downloadUrl = '/api/download-qr-pdf';
@@ -372,81 +367,85 @@ function downloadCurrentPdf() {
 
 // Load existing PDFs and history
 async function loadExistingPdfs() {
-    console.log('Loading existing PDFs from public endpoint...');
+    console.log('Loading existing PDFs...');
     try {
-        // Load all public PDFs
-        const response = await fetch('/api/public-pdfs');
-        console.log('Public PDFs response status:', response.status);
+        // Load current configuration
+        const configResponse = await fetch('/api/user-config');
+        console.log('Config response status:', configResponse.status);
+        const config = await configResponse.json();
+        console.log('Config data:', config);
         
-        if (!response.ok) {
-            logActivity('Failed to load PDFs from server', 'error');
-            return;
-        }
-        
-        const data = await response.json();
-        console.log('Public PDFs data:', data);
-        
-        // Add current PDFs to list
-        if (data.currentPdfs && data.currentPdfs.length > 0) {
-            logActivity(`Found ${data.currentPdfs.length} current PDF(s)`, 'info');
+        if (config.qrPdf) {
+            logActivity(`Found current PDF: ${config.qrPdf.filename}`, 'info');
             
-            data.currentPdfs.forEach(pdf => {
-                const pdfId = `current_${pdf.deviceId}_${Date.now()}`;
-                receivedPdfs.set(pdfId, {
-                    pdfInfo: {
-                        filename: pdf.filename,
-                        totalQRs: pdf.qrCount,
-                        uploadedAt: pdf.uploadedAt,
-                        deviceId: pdf.deviceId,
-                        fileSize: pdf.fileSize
-                    },
-                    qrCodes: pdf.qrCodes || []
-                });
-                
-                addPdfToList({
-                    filename: pdf.filename,
-                    totalQRs: pdf.qrCount,
-                    uploadedAt: pdf.uploadedAt,
-                    deviceId: pdf.deviceId,
-                    fileSize: pdf.fileSize,
-                    isHistory: false
-                }, pdf.qrCodes || []);
+            // Add current PDF to list
+            const pdfId = `current_${Date.now()}`;
+            receivedPdfs.set(pdfId, {
+                pdfInfo: {
+                    filename: config.qrPdf.filename,
+                    totalQRs: config.qrCodes ? config.qrCodes.length : 0,
+                    uploadedAt: config.qrPdf.uploadedAt
+                },
+                qrCodes: config.qrCodes || []
             });
+            
+            addPdfToList({
+                filename: config.qrPdf.filename,
+                totalQRs: config.qrCodes ? config.qrCodes.length : 0,
+                uploadedAt: config.qrPdf.uploadedAt
+            }, config.qrCodes || []);
+        } else {
+            console.log('No qrPdf found in config');
+            logActivity('No current PDF found', 'info');
         }
         
-        // Add historical PDFs to list
-        if (data.historyPdfs && data.historyPdfs.length > 0) {
-            logActivity(`Found ${data.historyPdfs.length} historical PDF(s)`, 'info');
+        // Load PDF history
+        console.log('Loading PDF history...');
+        const historyResponse = await fetch('/api/pdf-history');
+        console.log('History response status:', historyResponse.status);
+        if (historyResponse.ok) {
+            const historyData = await historyResponse.json();
+            console.log('History data:', historyData);
             
-            data.historyPdfs.forEach(pdf => {
-                const pdfId = `history_${pdf.historyId}`;
-                receivedPdfs.set(pdfId, {
-                    pdfInfo: {
-                        filename: pdf.filename,
-                        totalQRs: pdf.qrCount,
-                        uploadedAt: pdf.uploadedAt,
-                        deviceId: pdf.deviceId,
-                        fileSize: pdf.fileSize,
+            if (historyData.history && historyData.history.length > 0) {
+                logActivity(`Found ${historyData.history.length} PDFs in history`, 'info');
+                
+                // Add historical PDFs (skip the first one if it matches current)
+                historyData.history.forEach((historyItem, index) => {
+                    // Skip if this is the current PDF (avoid duplicates)
+                    if (config.qrPdf && historyItem.filename === config.qrPdf.filename && index === 0) {
+                        return;
+                    }
+                    
+                    const pdfId = `history_${historyItem.id}`;
+                    receivedPdfs.set(pdfId, {
+                        pdfInfo: {
+                            filename: historyItem.filename,
+                            totalQRs: historyItem.qrCount,
+                            uploadedAt: historyItem.uploadedAt,
+                            isHistory: true,
+                            historyId: historyItem.id,
+                            fileSize: historyItem.fileSize
+                        },
+                        qrCodes: []
+                    });
+                    
+                    addPdfToList({
+                        filename: historyItem.filename,
+                        totalQRs: historyItem.qrCount,
+                        uploadedAt: historyItem.uploadedAt,
                         isHistory: true,
-                        historyId: pdf.historyId
-                    },
-                    qrCodes: []
+                        historyId: historyItem.id,
+                        fileSize: historyItem.fileSize
+                    }, []);
                 });
-                
-                addPdfToList({
-                    filename: pdf.filename,
-                    totalQRs: pdf.qrCount,
-                    uploadedAt: pdf.uploadedAt,
-                    deviceId: pdf.deviceId,
-                    fileSize: pdf.fileSize,
-                    isHistory: true,
-                    historyId: pdf.historyId
-                }, []);
-            });
-        }
-        
-        if (data.totalCount === 0) {
-            logActivity('No PDFs found on server', 'info');
+            } else {
+                console.log('No PDF history found');
+                logActivity('No PDF history found', 'info');
+            }
+        } else {
+            console.log('Failed to fetch PDF history');
+            logActivity('Failed to load PDF history', 'error');
         }
         
     } catch (error) {
