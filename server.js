@@ -95,6 +95,9 @@ let connectedDevices = new Map(); // deviceId -> socket
 // Store user configurations
 let userConfigurations = new Map(); // deviceId -> { qrCodes: [], itemImages: [], completed: false }
 
+// Store PDF history for each device
+let pdfHistory = new Map(); // deviceId -> [{ filename, uploadedAt, filePath, qrCount, fileSize }]
+
 // Ensure directories exist
 const ensureDirectories = () => {
     const dirs = ['uploads', 'qr-codes', 'item-images', 'zip-exports'];
@@ -125,6 +128,43 @@ function broadcastToWebClients(deviceId, event, data) {
             socket.emit(event, data);
         }
     });
+}
+
+// Helper function to manage PDF history
+function addToPdfHistory(deviceId, filename, filePath, qrCount, fileSize) {
+    if (!pdfHistory.has(deviceId)) {
+        pdfHistory.set(deviceId, []);
+    }
+    
+    const history = pdfHistory.get(deviceId);
+    const historyEntry = {
+        filename: filename,
+        uploadedAt: new Date().toISOString(),
+        filePath: filePath,
+        qrCount: qrCount,
+        fileSize: fileSize,
+        id: `pdf_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    };
+    
+    // Add to beginning of array (most recent first)
+    history.unshift(historyEntry);
+    
+    // Keep last 50 PDF uploads per device
+    if (history.length > 50) {
+        // Remove old files from filesystem
+        const oldEntry = history.pop();
+        try {
+            if (fs.existsSync(oldEntry.filePath)) {
+                fs.unlinkSync(oldEntry.filePath);
+                console.log(`🗑️ Removed old PDF: ${oldEntry.filename}`);
+            }
+        } catch (error) {
+            console.error(`Error removing old PDF file: ${error.message}`);
+        }
+    }
+    
+    console.log(`📚 Added to PDF history for ${deviceId}: ${filename} (${history.length} total)`);
+    return historyEntry;
 }
 
 // Authentication middleware
@@ -557,21 +597,32 @@ app.post('/api/pdf', (req, res) => {
         
         const userConfig = userConfigurations.get(deviceId);
         
-        // Save PDF to filesystem
+        // Create timestamped filename for permanent storage
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const permanentFilename = `${timestamp}_${filename}`;
+        
+        // Save PDF to filesystem with permanent storage
         const pdfPath = path_module.join('qr-codes', deviceId);
         if (!fs.existsSync(pdfPath)) {
             fs.mkdirSync(pdfPath, { recursive: true });
         }
         
-        const pdfFilePath = path_module.join(pdfPath, filename);
+        const pdfFilePath = path_module.join(pdfPath, permanentFilename);
         const pdfBuffer = Buffer.from(pdfData, 'base64');
         fs.writeFileSync(pdfFilePath, pdfBuffer);
         
-        // Store PDF info
+        // Add to PDF history
+        const historyEntry = addToPdfHistory(deviceId, filename, pdfFilePath, 
+                                           qrList ? qrList.length : 0, pdfBuffer.length);
+        
+        // Store current PDF info (most recent)
         userConfig.qrPdf = {
             filename: filename,
+            originalFilename: filename,
+            permanentFilename: permanentFilename,
             filePath: pdfFilePath,
-            uploadedAt: new Date().toISOString()
+            uploadedAt: historyEntry.uploadedAt,
+            historyId: historyEntry.id
         };
         
         // Process QR code list if provided
@@ -640,6 +691,56 @@ app.get('/api/config', (req, res) => {
         mapProvider: 'leaflet',
         version: '1.0.0'
     });
+});
+
+// API endpoint to get PDF history
+app.get('/api/pdf-history', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const history = pdfHistory.get(deviceId) || [];
+    
+    // Return history without file paths for security
+    const sanitizedHistory = history.map(entry => ({
+        id: entry.id,
+        filename: entry.filename,
+        uploadedAt: entry.uploadedAt,
+        qrCount: entry.qrCount,
+        fileSize: entry.fileSize
+    }));
+    
+    res.json({
+        deviceId: deviceId,
+        history: sanitizedHistory,
+        totalCount: sanitizedHistory.length
+    });
+});
+
+// API endpoint to download specific PDF from history
+app.get('/api/download-pdf-history/:historyId', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const deviceId = req.session.deviceId;
+    const historyId = req.params.historyId;
+    const history = pdfHistory.get(deviceId) || [];
+    
+    const pdfEntry = history.find(entry => entry.id === historyId);
+    
+    if (!pdfEntry) {
+        return res.status(404).json({ error: 'PDF not found in history' });
+    }
+    
+    if (fs.existsSync(pdfEntry.filePath)) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${pdfEntry.filename}"`);
+        res.sendFile(path_module.resolve(pdfEntry.filePath));
+    } else {
+        res.status(404).json({ error: 'PDF file not found on server' });
+    }
 });
 
 // API endpoint to get authorized devices (for debugging)
@@ -725,21 +826,32 @@ io.on('connection', (socket) => {
                     
                     const userConfig = userConfigurations.get(socket.deviceId);
                     
-                    // Save PDF to filesystem
+                    // Create timestamped filename for permanent storage
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const permanentFilename = `${timestamp}_${data.filename}`;
+                    
+                    // Save PDF to filesystem with permanent storage
                     const pdfPath = path_module.join('qr-codes', socket.deviceId);
                     if (!fs.existsSync(pdfPath)) {
                         fs.mkdirSync(pdfPath, { recursive: true });
                     }
                     
-                    const pdfFilePath = path_module.join(pdfPath, data.filename);
+                    const pdfFilePath = path_module.join(pdfPath, permanentFilename);
                     const pdfBuffer = Buffer.from(data.pdfData, 'base64');
                     fs.writeFileSync(pdfFilePath, pdfBuffer);
                     
-                    // Store PDF info
+                    // Add to PDF history
+                    const historyEntry = addToPdfHistory(socket.deviceId, data.filename, pdfFilePath, 
+                                                       data.qrList.length, pdfBuffer.length);
+                    
+                    // Store current PDF info (most recent)
                     userConfig.qrPdf = {
                         filename: data.filename,
+                        originalFilename: data.filename,
+                        permanentFilename: permanentFilename,
                         filePath: pdfFilePath,
-                        uploadedAt: new Date().toISOString()
+                        uploadedAt: historyEntry.uploadedAt,
+                        historyId: historyEntry.id
                     };
                     
                     // Process QR code list and create individual QR entries

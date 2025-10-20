@@ -212,17 +212,35 @@ function addPdfToList(pdfInfo, qrCodes) {
     pdfStatus.style.display = 'none';
     pdfList.style.display = 'block';
     
+    // Format file size
+    const formatFileSize = (bytes) => {
+        if (!bytes) return '';
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+    };
+    
+    // Create status badge
+    const statusBadge = pdfInfo.isHistory ? 
+        '<span class="badge badge-secondary ml-2">History</span>' : 
+        '<span class="badge badge-primary ml-2">Current</span>';
+    
+    // Create file size display
+    const fileSizeDisplay = pdfInfo.fileSize ? 
+        `• <i class="fas fa-file"></i> ${formatFileSize(pdfInfo.fileSize)}` : '';
+    
     const pdfItemHtml = `
         <div class="pdf-item" data-pdf-id="${pdfId}">
             <div class="pdf-info">
                 <div class="pdf-title">
-                    <i class="fas fa-file-pdf"></i> ${pdfInfo.filename}
+                    <i class="fas fa-file-pdf"></i> ${pdfInfo.filename}${statusBadge}
                 </div>
                 <div class="pdf-details">
                     <small>
                         <i class="fas fa-qrcode"></i> ${pdfInfo.totalQRs} QR codes • 
                         <i class="fas fa-clock"></i> ${new Date(pdfInfo.uploadedAt || Date.now()).toLocaleString()}
-                        • <i class="fas fa-microchip"></i> Received via ${qrCodes.length > 0 ? 'Socket.IO' : 'HTTP API'}
+                        ${fileSizeDisplay}
+                        • <i class="fas fa-microchip"></i> ${pdfInfo.isHistory ? 'Historical' : 'Current'}
                     </small>
                 </div>
             </div>
@@ -295,20 +313,31 @@ function previewPdf(pdfId) {
 
 // Download PDF
 function downloadPdf(pdfId) {
-    logActivity(`Downloading PDF: ${pdfId}`, 'info');
+    const pdfData = receivedPdfs.get(pdfId);
+    if (!pdfData) {
+        logActivity('PDF not found for download', 'error');
+        return;
+    }
     
-    // Use the existing download endpoint
-    const downloadUrl = '/api/download-qr-pdf';
+    logActivity(`Downloading PDF: ${pdfData.pdfInfo.filename}`, 'info');
+    
+    // Determine download URL based on whether it's historical or current
+    let downloadUrl;
+    if (pdfData.pdfInfo.isHistory && pdfData.pdfInfo.historyId) {
+        downloadUrl = `/api/download-pdf-history/${pdfData.pdfInfo.historyId}`;
+    } else {
+        downloadUrl = '/api/download-qr-pdf';
+    }
     
     // Create temporary link for download
     const link = document.createElement('a');
     link.href = downloadUrl;
-    link.download = receivedPdfs.get(pdfId)?.pdfInfo?.filename || 'smartbag.pdf';
+    link.download = pdfData.pdfInfo.filename || 'smartbag.pdf';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     
-    logActivity(`PDF download initiated`, 'success');
+    logActivity(`PDF download initiated: ${pdfData.pdfInfo.filename}`, 'success');
 }
 
 // Download current PDF from modal
@@ -320,17 +349,18 @@ function downloadCurrentPdf() {
     }
 }
 
-// Load existing PDFs
+// Load existing PDFs and history
 async function loadExistingPdfs() {
     try {
-        const response = await fetch('/api/user-config');
-        const config = await response.json();
+        // Load current configuration
+        const configResponse = await fetch('/api/user-config');
+        const config = await configResponse.json();
         
         if (config.qrPdf) {
-            logActivity(`Found existing PDF: ${config.qrPdf.filename}`, 'info');
+            logActivity(`Found current PDF: ${config.qrPdf.filename}`, 'info');
             
-            // Add to list
-            const pdfId = `existing_${Date.now()}`;
+            // Add current PDF to list
+            const pdfId = `current_${Date.now()}`;
             receivedPdfs.set(pdfId, {
                 pdfInfo: {
                     filename: config.qrPdf.filename,
@@ -346,6 +376,47 @@ async function loadExistingPdfs() {
                 uploadedAt: config.qrPdf.uploadedAt
             }, config.qrCodes);
         }
+        
+        // Load PDF history
+        const historyResponse = await fetch('/api/pdf-history');
+        if (historyResponse.ok) {
+            const historyData = await historyResponse.json();
+            
+            if (historyData.history && historyData.history.length > 0) {
+                logActivity(`Found ${historyData.history.length} PDFs in history`, 'info');
+                
+                // Add historical PDFs (skip the first one if it matches current)
+                historyData.history.forEach((historyItem, index) => {
+                    // Skip if this is the current PDF (avoid duplicates)
+                    if (config.qrPdf && historyItem.filename === config.qrPdf.filename && index === 0) {
+                        return;
+                    }
+                    
+                    const pdfId = `history_${historyItem.id}`;
+                    receivedPdfs.set(pdfId, {
+                        pdfInfo: {
+                            filename: historyItem.filename,
+                            totalQRs: historyItem.qrCount,
+                            uploadedAt: historyItem.uploadedAt,
+                            isHistory: true,
+                            historyId: historyItem.id,
+                            fileSize: historyItem.fileSize
+                        },
+                        qrCodes: []
+                    });
+                    
+                    addPdfToList({
+                        filename: historyItem.filename,
+                        totalQRs: historyItem.qrCount,
+                        uploadedAt: historyItem.uploadedAt,
+                        isHistory: true,
+                        historyId: historyItem.id,
+                        fileSize: historyItem.fileSize
+                    }, []);
+                });
+            }
+        }
+        
     } catch (error) {
         logActivity('Failed to load existing PDFs', 'error');
     }
