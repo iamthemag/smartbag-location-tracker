@@ -30,6 +30,9 @@ import socketio
 import requests
 import threading
 from datetime import datetime
+from gpiozero import Button
+from signal import pause
+import pigpio
 
 # Try to import RPi.GPIO; if not available, we'll simulate
 try:
@@ -197,7 +200,95 @@ def main():
             pull = GPIO.PUD_UP
         else:
             pull = GPIO.PUD_DOWN
-        GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=pull)
+
+        # replace the plain setup call with a retry loop
+        MAX_SETUP_RETRIES = 6
+        RETRY_DELAY_SEC = 1.0
+
+        for attempt in range(1, MAX_SETUP_RETRIES + 1):
+            try:
+                GPIO.setup(SWITCH_PIN, GPIO.IN, pull_up_down=pull)
+                log(f'GPIO{SWITCH_PIN} initialized (attempt {attempt})')
+                break
+            except Exception as e:
+                log(f'GPIO setup attempt {attempt} failed: {e}')
+                if attempt == MAX_SETUP_RETRIES:
+                    log('Failed to claim GPIO after retries. Will attempt pigpio fallback or polling fallback.')
+                    gpio_setup_failed = True
+                time.sleep(RETRY_DELAY_SEC)
+        else:
+            gpio_setup_failed = False
+
+        if 'gpio_setup_failed' in locals() and gpio_setup_failed:
+            # Try pigpio fallback if available
+            try:
+                log('Attempting pigpio fallback...')
+                pi = pigpio.pi()
+                if pi and pi.connected:
+                    log('pigpiod connected - using pigpio for switch handling')
+                    def pigpio_callback(gpio, level, tick):
+                        # level: 0 = low (pressed), 1 = high (released), 2 = watchdog timeout
+                        if level == 0:
+                            log('pigpio: switch pressed -> emergency')
+                            send_emergency('switch pressed (pigpio)')
+                        elif level == 1:
+                            log('pigpio: switch released -> clear')
+                            send_clear()
+
+                    pi.set_mode(SWITCH_PIN, pigpio.INPUT)
+                    pi.set_pull_up_down(SWITCH_PIN, pigpio.PUD_UP)
+                    pi.callback(SWITCH_PIN, pigpio.EITHER_EDGE, pigpio_callback)
+
+                    try:
+                        while True:
+                            time.sleep(1)
+                    except KeyboardInterrupt:
+                        log('Stopping pigpio loop...')
+                    finally:
+                        pi.stop()
+                        sio.disconnect()
+                        log('Clean exit (pigpio)')
+                    return
+                else:
+                    log('pigpiod not available or connection failed')
+            except Exception as e:
+                log('pigpio fallback error:', e)
+
+            # As a last resort, fall back to polling using RPi.GPIO if possible
+            try:
+                log('Falling back to polling mode (using RPi.GPIO input reads)')
+                last_state = None
+                while True:
+                    state = None
+                    try:
+                        state = GPIO.input(SWITCH_PIN)
+                    except Exception:
+                        # cannot read via RPi.GPIO
+                        state = None
+                    if state is not None:
+                        is_active = (state == GPIO.LOW) if PULL_UP else (state == GPIO.HIGH)
+                        if last_state is None:
+                            last_state = is_active
+                        elif is_active != last_state:
+                            if is_active:
+                                log('Polling: detected ON -> emergency')
+                                send_emergency('Switch pressed (poll)')
+                            else:
+                                log('Polling: detected OFF -> clear')
+                                send_clear()
+                            last_state = is_active
+                    time.sleep(0.25)
+            except KeyboardInterrupt:
+                log('Stopping polling loop...')
+            finally:
+                try:
+                    GPIO.cleanup()
+                except Exception:
+                    pass
+                sio.disconnect()
+                log('Clean exit (polling)')
+            return
+        
 
         # Add event detection for both rising and falling edges
         GPIO.add_event_detect(SWITCH_PIN, GPIO.BOTH, callback=gpio_callback, bouncetime=DEBOUNCE_MS)
@@ -215,6 +306,27 @@ def main():
     else:
         demo_loop()
         sio.disconnect()
+
+    pi = pigpio.pi()  # connects to pigpiod
+    if not pi.connected:
+        log('Cannot connect to pigpiod'); sys.exit(1)
+
+    def callback(gpio, level, tick):
+        if level == 0:
+            send_emergency('switch pressed (pigpio)')
+        elif level == 1:
+            send_clear()
+
+    pi.set_mode(SWITCH_PIN, pigpio.INPUT)
+    pi.set_pull_up_down(SWITCH_PIN, pigpio.PUD_UP)
+    pi.callback(SWITCH_PIN, pigpio.EITHER_EDGE, callback)
+
+    # Keep process alive
+    try:
+        while True:
+            time.sleep(1)
+    finally:
+        pi.stop()
 
 
 if __name__ == '__main__':
