@@ -39,7 +39,7 @@ except Exception:
     GPIO_AVAILABLE = False
 
 # Configuration
-SERVER_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:3000"
+SERVER_URL = sys.argv[1] if len(sys.argv) > 1 else "https://location-tracker-app-waa4.onrender.com/"
 DEVICE_ID = sys.argv[2] if len(sys.argv) > 2 else "raspi-001"
 SWITCH_PIN = int(sys.argv[3]) if len(sys.argv) > 3 else 16
 PULL_UP = True  # We assume switch connects pin to GND when closed
