@@ -2,8 +2,8 @@
 """
 Raspberry Pi Emergency Switch Sender
 
-Wiring:
-- Connect one side of the switch to a GPIO pin (default 17).
+- Wiring:
+- Connect one side of the switch to a GPIO pin (default 16).
 - Connect the other side to GND.
 - This script uses the internal pull-up resistor (so pin is HIGH when open, LOW when closed).
 
@@ -41,7 +41,7 @@ except Exception:
 # Configuration
 SERVER_URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:3000"
 DEVICE_ID = sys.argv[2] if len(sys.argv) > 2 else "raspi-001"
-SWITCH_PIN = int(sys.argv[3]) if len(sys.argv) > 3 else 17
+SWITCH_PIN = int(sys.argv[3]) if len(sys.argv) > 3 else 16
 PULL_UP = True  # We assume switch connects pin to GND when closed
 DEBOUNCE_MS = 300
 HTTP_FALLBACK = True  # Use HTTP if socket isn't connected
