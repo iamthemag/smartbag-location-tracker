@@ -98,6 +98,8 @@ let userConfigurations = new Map(); // deviceId -> { qrCodes: [], itemImages: []
 // Store PDF history for each device
 let pdfHistory = new Map(); // deviceId -> [{ filename, uploadedAt, filePath, qrCount, fileSize }]
 
+// Store active emergencies per device
+let emergencies = new Map(); // deviceId -> { id, latitude, longitude, message, timestamp, deviceId }
 // Ensure directories exist
 const ensureDirectories = () => {
     const dirs = ['uploads', 'qr-codes', 'item-images', 'zip-exports'];
@@ -165,6 +167,45 @@ function addToPdfHistory(deviceId, filename, filePath, qrCount, fileSize) {
     
     console.log(`📚 Added to PDF history for ${deviceId}: ${filename} (${history.length} total)`);
     return historyEntry;
+}
+
+// Helper functions to manage emergencies
+function addEmergency(deviceId, latitude, longitude, message) {
+    const id = `emergency_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const entry = {
+        id,
+        deviceId,
+        latitude: latitude || null,
+        longitude: longitude || null,
+        message: message || 'Needs help',
+        timestamp: new Date().toISOString(),
+        active: true
+    };
+
+    emergencies.set(deviceId, entry);
+    console.log(`🚨 Emergency added for ${deviceId}:`, entry);
+
+    // Broadcast to web clients authenticated for this device
+    broadcastToWebClients(deviceId, 'emergency', entry);
+
+    // Also emit globally so admin UIs can listen
+    io.emit('emergency', { deviceId, emergency: entry });
+
+    return entry;
+}
+
+function clearEmergency(deviceId) {
+    if (!emergencies.has(deviceId)) return null;
+    const prev = emergencies.get(deviceId);
+    emergencies.delete(deviceId);
+
+    console.log(`✅ Emergency cleared for ${deviceId}`);
+
+    // Notify clients
+    broadcastToWebClients(deviceId, 'emergencyCleared', { deviceId, id: prev.id, clearedAt: new Date().toISOString() });
+    io.emit('emergencyCleared', { deviceId, id: prev.id, clearedAt: new Date().toISOString() });
+
+    return prev;
 }
 
 // Authentication middleware
@@ -753,6 +794,44 @@ app.get('/api/location', (req, res) => {
 
 // Helper function to update location data
 function updateLocationData(locationData) {
+    // Compute speed based on previous location for same device if available
+    try {
+        // Find last location for this device in history (search from end)
+        let prev = null;
+        for (let i = locationHistory.length - 1; i >= 0; i--) {
+            if (locationHistory[i].deviceId === locationData.deviceId) {
+                prev = locationHistory[i];
+                break;
+            }
+        }
+
+        if (prev && prev.latitude != null && prev.longitude != null && prev.timestamp) {
+            const prevTime = new Date(prev.timestamp).getTime();
+            const currTime = new Date(locationData.timestamp).getTime();
+            const dtSeconds = (currTime - prevTime) / 1000;
+            if (dtSeconds > 0) {
+                // Haversine distance in kilometers
+                const toRad = (v) => v * Math.PI / 180;
+                const R = 6371; // km
+                const dLat = toRad(locationData.latitude - prev.latitude);
+                const dLon = toRad(locationData.longitude - prev.longitude);
+                const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(toRad(prev.latitude)) * Math.cos(toRad(locationData.latitude)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                const distanceKm = R * c;
+
+                // speed in km/h
+                const speedKmh = (distanceKm * 3600) / dtSeconds;
+                // speed in m/s
+                const speedMps = (distanceKm * 1000) / dtSeconds;
+
+                locationData.speedKmh = parseFloat(speedKmh.toFixed(2));
+                locationData.speedMps = parseFloat(speedMps.toFixed(2));
+            }
+        }
+    } catch (e) {
+        console.error('Error computing speed:', e);
+    }
+
     currentLocation = locationData;
     
     // Add to history
@@ -768,6 +847,67 @@ function updateLocationData(locationData) {
     // Broadcast to all connected web clients
     io.emit('locationUpdate', currentLocation);
 }
+
+// Emergency endpoints
+// Raise an emergency (HTTP) - allows either an authenticated web session for the device
+// or a request from an authorized deviceId (for Pi HTTP fallback).
+app.post('/api/emergency', (req, res) => {
+    const { deviceId, latitude, longitude, message } = req.body;
+
+    if (!deviceId) {
+        return res.status(400).json({ error: 'deviceId is required' });
+    }
+
+    // Allow if session is authenticated for same device, or deviceId is in authorized list
+    const sessionDevice = req.session && req.session.authenticated ? req.session.deviceId : null;
+    if (!(sessionDevice === deviceId || AUTHORIZED_DEVICES.includes(deviceId))) {
+        return res.status(401).json({ error: 'Not authorized to raise emergency for this device' });
+    }
+
+    try {
+        const entry = addEmergency(deviceId, latitude, longitude, message);
+        res.json({ success: true, emergency: entry });
+    } catch (err) {
+        console.error('Emergency error:', err);
+        res.status(500).json({ error: 'Failed to record emergency' });
+    }
+});
+
+// Clear an emergency (HTTP) - requires authenticated web session for that device
+app.post('/api/clear-emergency', (req, res) => {
+    // Allow clearing via authenticated web session for that device,
+    // or allow a device HTTP fallback by providing deviceId in body when authorized.
+    const bodyDeviceId = req.body && req.body.deviceId ? req.body.deviceId : null;
+    const sessionDevice = req.session && req.session.authenticated ? req.session.deviceId : null;
+
+    let deviceIdToClear = null;
+
+    if (sessionDevice) {
+        deviceIdToClear = sessionDevice;
+    } else if (bodyDeviceId && AUTHORIZED_DEVICES.includes(bodyDeviceId)) {
+        deviceIdToClear = bodyDeviceId;
+    } else {
+        return res.status(401).json({ error: 'Not authorized to clear emergency for this device' });
+    }
+
+    const prev = clearEmergency(deviceIdToClear);
+    if (!prev) {
+        return res.status(404).json({ error: 'No active emergency for this device' });
+    }
+
+    res.json({ success: true, cleared: true, previous: prev });
+});
+
+// Get current emergencies for debugging (requires auth)
+app.get('/api/emergencies', (req, res) => {
+    if (!req.session || !req.session.authenticated) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const deviceId = req.session.deviceId;
+    const active = emergencies.get(deviceId) || null;
+    res.json({ deviceId, emergency: active });
+});
 
 // API endpoint to get app configuration
 app.get('/api/config', (req, res) => {
@@ -1118,6 +1258,30 @@ io.on('connection', (socket) => {
                         });
                         socket.emit('photoTransferComplete', { count: photosToSend.length });
                     }
+                }
+            });
+
+            // Handle emergency signal from device
+            socket.on('emergency', (data) => {
+                if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
+                    console.log(`🚨 Emergency received from device ${socket.deviceId}:`, data);
+                    const lat = data.latitude || null;
+                    const lon = data.longitude || null;
+                    const msg = data.message || 'Needs help';
+                    const entry = addEmergency(socket.deviceId, lat, lon, msg);
+                    socket.emit('emergencyAck', { success: true, emergency: entry });
+                } else {
+                    socket.emit('emergencyError', { error: 'Unauthorized emergency signal' });
+                }
+            });
+
+            // Handle clear emergency request from device
+            socket.on('clearEmergency', () => {
+                if (socket.deviceId && AUTHORIZED_DEVICES.includes(socket.deviceId)) {
+                    const prev = clearEmergency(socket.deviceId);
+                    socket.emit('clearEmergencyAck', { success: !!prev });
+                } else {
+                    socket.emit('clearEmergencyError', { error: 'Unauthorized' });
                 }
             });
             

@@ -47,6 +47,12 @@
           <i class="fas fa-sign-out-alt"></i> Logout
         </button>
       </div>
+      <!-- Emergency banner (hidden by default) -->
+      <div id="emergencyBanner" class="alert alert-danger mt-2" style="display: none;">
+        <strong>🚨 Emergency:</strong> <span id="emergencyMessage">Person needs help</span>
+        <span id="emergencyCoords" style="margin-left: 10px;"></span>
+        <button id="clearEmergencyBtn" class="btn btn-sm btn-light float-right">Acknowledge / Clear</button>
+      </div>
       <center>
         <hr style="height:2px; border:none; color:#ffffff; background-color:#ffffff; width:35%; margin: 0 auto;">
       </center>
@@ -73,6 +79,10 @@
             <div class="coordinates" id="coordinates">
               <span>Waiting for location data...</span>
             </div>
+                <div id="speedMeter" style="width:220px; height:140px; display:none; margin-top:10px;">
+                  <canvas id="speedCanvas" width="220" height="140" style="display:block;margin:0 auto;background:transparent"></canvas>
+                  <div id="speedText" style="text-align:center;color:#ffffff;margin-top:6px;font-weight:600;"></div>
+                </div>
             <div class="timestamp" id="timestamp"></div>
             <div class="accuracy" id="accuracy"></div>
           </div>

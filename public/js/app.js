@@ -14,6 +14,27 @@ let isTracking = true;  // Start tracking by default
 let mapInitialized = false;
 let connectedDevices = [];  // Track connected devices
 let loadingOverlay = null;  // Loading overlay element
+let emergencyMarker = null; // Marker for emergency location
+let activeEmergency = null; // Current emergency data
+let emergencyVibrateInterval = null;
+let emergencyBeepInterval = null;
+
+// WebAudio context for beep alerts (created lazily)
+let emergencyAudioCtx = null;
+
+// Detect if client is likely a phone/mobile device
+function isMobileDevice() {
+  try {
+    const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+    // Common mobile indicators
+    if (/android|iphone|ipad|ipod|iemobile|windows phone|mobile/i.test(ua)) return true;
+    // Touchscreen with small width is likely mobile
+    if ('maxTouchPoints' in navigator && navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 800) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
 
 // Initialize Leaflet Map with satellite view
 function initializeMap() {
@@ -53,6 +74,25 @@ function initializeMap() {
   const loadingLogoutBtn = document.getElementById('loadingLogoutBtn');
   if (loadingLogoutBtn) {
     loadingLogoutBtn.addEventListener('click', handleLogout);
+  }
+  // Add event listener for emergency clear button
+  const clearEmergencyBtn = document.getElementById('clearEmergencyBtn');
+  if (clearEmergencyBtn) {
+    clearEmergencyBtn.addEventListener('click', function() {
+      // Call server to clear emergency for this session/device
+      fetch('/api/clear-emergency', { method: 'POST' }).then(r => r.json()).then(resp => {
+        if (resp && resp.success) {
+          activeEmergency = null;
+          clearEmergencyUI();
+          alert('Emergency acknowledged and cleared');
+        } else {
+          alert('Failed to clear emergency: ' + (resp.error || 'unknown'));
+        }
+      }).catch(err => {
+        console.error('Clear emergency error:', err);
+        alert('Failed to clear emergency');
+      });
+    });
   }
   
   // Get user's current location
@@ -297,6 +337,160 @@ function centerMapToBothLocations() {
   }
 }
 
+// Show emergency on UI: banner and red marker
+function showEmergency(emergency) {
+  try {
+    // Show banner
+    const banner = document.getElementById('emergencyBanner');
+    const msgEl = document.getElementById('emergencyMessage');
+    const coordsEl = document.getElementById('emergencyCoords');
+    if (banner && msgEl && coordsEl) {
+      msgEl.textContent = emergency.message || 'Person needs help';
+      if (emergency.latitude && emergency.longitude) {
+        coordsEl.textContent = `Lat: ${emergency.latitude.toFixed(5)}, Lng: ${emergency.longitude.toFixed(5)}`;
+      } else {
+        coordsEl.textContent = '';
+      }
+      banner.style.display = 'block';
+    }
+
+    // Add / update emergency marker on map
+    if (emergency.latitude && emergency.longitude && map) {
+      // Remove previous emergency marker
+      if (emergencyMarker) {
+        map.removeLayer(emergencyMarker);
+      }
+      emergencyMarker = L.circleMarker([emergency.latitude, emergency.longitude], {
+        radius: 14,
+        fillColor: '#FF0000',
+        fillOpacity: 0.9,
+        color: '#880000',
+        weight: 2
+      }).addTo(map).bindPopup(`<strong>Emergency</strong><br>${emergency.message || ''}`);
+
+      // Center map to include emergency and user location if available
+      if (userLocation) {
+        const bounds = L.latLngBounds([
+          [userLocation.lat, userLocation.lng],
+          [emergency.latitude, emergency.longitude]
+        ]);
+        map.fitBounds(bounds, { padding: [50, 50] });
+      } else {
+        map.setView([emergency.latitude, emergency.longitude], 16);
+      }
+    }
+    // Start vibration/audio alert
+    startEmergencyAlert();
+  } catch (err) {
+    console.error('showEmergency error:', err);
+  }
+}
+
+function clearEmergencyUI() {
+  try {
+    const banner = document.getElementById('emergencyBanner');
+    if (banner) banner.style.display = 'none';
+    const coordsEl = document.getElementById('emergencyCoords');
+    if (coordsEl) coordsEl.textContent = '';
+    if (emergencyMarker && map) {
+      map.removeLayer(emergencyMarker);
+      emergencyMarker = null;
+    }
+    // Stop vibration/audio alert
+    stopEmergencyAlert();
+  } catch (err) {
+    console.error('clearEmergencyUI error:', err);
+  }
+}
+
+// Start repeating vibration and audio beep to alert user
+function startEmergencyAlert() {
+  try {
+    // Vibration pattern: vibrate 400ms, pause 200ms, vibrate 200ms
+    if (isMobileDevice() && navigator && navigator.vibrate) {
+      // Immediately vibrate
+      navigator.vibrate([400, 200, 200]);
+      // Repeat periodically
+      if (!emergencyVibrateInterval) {
+        emergencyVibrateInterval = setInterval(() => {
+          try { navigator.vibrate([400, 200, 200]); } catch(e) {}
+        }, 1400);
+      }
+    }
+
+    // Audio beep using WebAudio
+    if (!emergencyAudioCtx) {
+      try {
+        emergencyAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {
+        emergencyAudioCtx = null;
+      }
+    }
+
+    if (emergencyAudioCtx && !emergencyBeepInterval) {
+      // Play an immediate beep and then repeat
+      playBeep();
+      emergencyBeepInterval = setInterval(() => {
+        playBeep();
+      }, 1400);
+    }
+  } catch (e) {
+    console.error('startEmergencyAlert error:', e);
+  }
+}
+
+function playBeep() {
+  try {
+    if (!emergencyAudioCtx) return;
+    // Some browsers require resume() to be called on user gesture
+    if (emergencyAudioCtx.state === 'suspended') {
+      emergencyAudioCtx.resume().catch(() => {});
+    }
+    const o = emergencyAudioCtx.createOscillator();
+    const g = emergencyAudioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880; // A5 tone
+    g.gain.value = 0.0001; // start very low to avoid click
+    o.connect(g);
+    g.connect(emergencyAudioCtx.destination);
+    const now = emergencyAudioCtx.currentTime;
+    // Ramp up and down quickly for short beep
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.2, now + 0.02);
+    o.start(now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    setTimeout(() => {
+      try { o.stop(); o.disconnect(); g.disconnect(); } catch(e) {}
+    }, 400);
+  } catch (e) {
+    console.error('playBeep error:', e);
+  }
+}
+
+// Stop vibration/audio
+function stopEmergencyAlert() {
+  try {
+    if (emergencyVibrateInterval) {
+      clearInterval(emergencyVibrateInterval);
+      emergencyVibrateInterval = null;
+    }
+    if (navigator && navigator.vibrate) {
+      // Cancel any ongoing vibration
+      try { navigator.vibrate(0); } catch(e) {}
+    }
+    if (emergencyBeepInterval) {
+      clearInterval(emergencyBeepInterval);
+      emergencyBeepInterval = null;
+    }
+    // Optionally suspend audio context to save resources
+    if (emergencyAudioCtx && typeof emergencyAudioCtx.suspend === 'function') {
+      emergencyAudioCtx.suspend().catch(() => {});
+    }
+  } catch (e) {
+    console.error('stopEmergencyAlert error:', e);
+  }
+}
+
 // Simple distance calculation using Haversine formula
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth's radius in kilometers
@@ -398,6 +592,22 @@ function initializeSocket() {
         showLoadingOverlay();   // Show loading overlay when disconnected
         updateConnectionStatus(false);
     });
+
+  // Emergency event from server
+  socket.on('emergency', function(payload) {
+    console.log('Received emergency:', payload);
+    // payload may be { deviceId, emergency } from global emit, or just emergency for targeted
+    let emergency = payload && payload.emergency ? payload.emergency : payload;
+    if (!emergency) return;
+    activeEmergency = emergency;
+    showEmergency(emergency);
+  });
+
+  socket.on('emergencyCleared', function(payload) {
+    console.log('Emergency cleared:', payload);
+    activeEmergency = null;
+    clearEmergencyUI();
+  });
     
     // Handle location updates
     socket.on('locationUpdate', function(location) {
@@ -613,6 +823,17 @@ function redraw(payload) {
         <strong>Lng:</strong> ${lng.toFixed(6)}<br>
         <strong>Device:</strong> ${payload.deviceId || 'Unknown'}
     `;
+
+    // Show speed if available
+    if (payload.speedKmh !== undefined && payload.speedKmh !== null) {
+      const speedHtml = `<div style="margin-top:6px;"><strong>Speed:</strong> ${payload.speedKmh} km/h</div>`;
+      document.getElementById('coordinates').innerHTML += speedHtml;
+      // Update speed meter visualization
+      updateSpeedMeter(payload.speedKmh);
+    }
+    else {
+      hideSpeedMeter();
+    }
     
     // Update timestamp
     const date = new Date(timestamp);
@@ -704,6 +925,92 @@ function updateDeviceStatus(status) {
 function updateStats() {
     document.getElementById('updateCount').textContent = updateCount;
     document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+}
+
+// Speed meter drawing
+function updateSpeedMeter(speedKmh) {
+  try {
+    const meter = document.getElementById('speedMeter');
+    const canvas = document.getElementById('speedCanvas');
+    const speedText = document.getElementById('speedText');
+    if (!canvas || !speedText || !meter) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+
+    // Draw background arc
+    const cx = w/2;
+    const cy = h*0.85;
+    const radius = Math.min(w*0.38, h*0.65);
+    const startAngle = Math.PI * 1.15; // ~207deg
+    const endAngle = Math.PI * -0.15;  // ~-27deg
+    const totalAngle = (endAngle > startAngle) ? (endAngle - startAngle) : (2*Math.PI - (startAngle - endAngle));
+
+    // meter visible
+    meter.style.display = 'block';
+
+    // background track
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = '#444';
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, endAngle, false);
+    ctx.stroke();
+
+    // Determine percentage of max speed
+    const maxSpeed = 120; // km/h
+    const pct = Math.max(0, Math.min(1, speedKmh / maxSpeed));
+    const angle = startAngle + pct * ((endAngle < startAngle) ? (2*Math.PI - (startAngle - endAngle)) : (endAngle - startAngle));
+
+    // Gradient color from green (slow) to red (fast)
+    const grad = ctx.createLinearGradient(cx-radius, cy, cx+radius, cy);
+    grad.addColorStop(0, '#4caf50');
+    grad.addColorStop(0.6, '#ff9800');
+    grad.addColorStop(1, '#f44336');
+
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, angle, false);
+    ctx.stroke();
+
+    // Draw ticks
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#bbb';
+    for (let i=0;i<=6;i++){
+      const tPct = i/6;
+      const a = startAngle + tPct * ((endAngle < startAngle) ? (2*Math.PI - (startAngle - endAngle)) : (endAngle - startAngle));
+      const x1 = cx + Math.cos(a) * (radius - 6);
+      const y1 = cy + Math.sin(a) * (radius - 6);
+      const x2 = cx + Math.cos(a) * (radius + 6);
+      const y2 = cy + Math.sin(a) * (radius + 6);
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+
+    // Draw needle
+    const needleAngle = angle;
+    const nx = cx + Math.cos(needleAngle) * (radius - 18);
+    const ny = cy + Math.sin(needleAngle) * (radius - 18);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx, ny);
+    ctx.lineWidth = 3; ctx.strokeStyle = '#222'; ctx.stroke();
+
+    // Center circle
+    ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 2*Math.PI); ctx.fillStyle = '#222'; ctx.fill();
+
+    // Numeric speed
+    speedText.textContent = `${speedKmh} km/h`;
+  } catch (e) {
+    console.error('updateSpeedMeter error:', e);
+  }
+}
+
+function hideSpeedMeter(){
+  try{
+    const meter = document.getElementById('speedMeter');
+    const speedText = document.getElementById('speedText');
+    if (meter) meter.style.display = 'none';
+    if (speedText) speedText.textContent = '';
+  }catch(e){}
 }
 
 // Handle page visibility change to manage connections
